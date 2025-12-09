@@ -4,14 +4,37 @@ const app = express();
 
 app.use(express.json());
 
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    service: 'Intercom Tickets Middleware',
+    version: '1.0.0'
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy' });
+});
+
+// Main endpoint - Tickets v2 to Intercom
 app.post('/tickets-to-intercom', async (req, res) => {
   try {
     // Get Intercom credentials from headers
     const intercomToken = req.headers['authorization']?.replace('Bearer ', '');
     const ticketTypeId = req.headers['x-ticket-type-id'];
 
+    if (!intercomToken || !ticketTypeId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required headers: Authorization and X-Ticket-Type-Id'
+      });
+    }
+
     // Log incoming data for debugging
-    console.log('Received ticket data:', req.body);
+    console.log('=== Received Ticket ===');
+    console.log('Ticket Type ID:', ticketTypeId);
+    console.log('Data:', JSON.stringify(req.body, null, 2));
 
     // Extract ticket data from Tickets v2
     const {
@@ -22,14 +45,16 @@ app.post('/tickets-to-intercom', async (req, res) => {
       content,
       panel_name,
       opened_at,
-      user_email, // If available
-      form_data // Custom form fields if any
+      user_email,
+      form_data
     } = req.body;
 
-    // Step 1: Create or get contact in Intercom
-    let contactId;
+    // Step 1: Find or create contact
+    let contactId = null;
+    
     try {
-      // Try to find existing contact by Discord ID
+      // Search for existing contact
+      console.log('Searching for contact with Discord ID:', user_id);
       const searchResponse = await axios.post(
         'https://api.intercom.io/contacts/search',
         {
@@ -48,15 +73,18 @@ app.post('/tickets-to-intercom', async (req, res) => {
         }
       );
 
-      if (searchResponse.data.data.length > 0) {
+      if (searchResponse.data.data && searchResponse.data.data.length > 0) {
         contactId = searchResponse.data.data[0].id;
+        console.log('Found existing contact:', contactId);
       } else {
         // Create new contact
+        console.log('Creating new contact...');
         const createResponse = await axios.post(
           'https://api.intercom.io/contacts',
           {
             external_id: user_id,
             name: username,
+            ...(user_email && { email: user_email }),
             custom_attributes: {
               discord_username: username,
               source: 'discord_tickets_v2'
@@ -71,25 +99,28 @@ app.post('/tickets-to-intercom', async (req, res) => {
           }
         );
         contactId = createResponse.data.id;
+        console.log('Created new contact:', contactId);
       }
-    } catch (error) {
-      console.error('Error with contact:', error.response?.data);
-      // Continue anyway, we'll use external_id in ticket creation
+    } catch (contactError) {
+      console.error('Contact error:', contactError.response?.data || contactError.message);
+      // Continue anyway - we'll use external_id
     }
 
     // Step 2: Prepare ticket description
     let ticketDescription = content || 'No description provided';
     
-    if (form_data && form_data.length > 0) {
+    if (form_data && Array.isArray(form_data) && form_data.length > 0) {
       ticketDescription += '\n\n**Form Responses:**\n';
       form_data.forEach(field => {
         ticketDescription += `• ${field.label}: ${field.value}\n`;
       });
     }
     
-    ticketDescription += `\n\n*Ticket opened via Discord Tickets v2*\n`;
-    ticketDescription += `Panel: ${panel_name}\n`;
-    ticketDescription += `Discord User ID: ${user_id}`;
+    ticketDescription += `\n\n---\n`;
+    ticketDescription += `*Created via Discord Tickets v2*\n`;
+    ticketDescription += `Panel: ${panel_name || 'Unknown'}\n`;
+    ticketDescription += `Discord User: ${username} (${user_id})\n`;
+    ticketDescription += `Discord Ticket ID: ${ticket_id}`;
 
     // Step 3: Create ticket in Intercom
     const ticketPayload = {
@@ -103,7 +134,8 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     };
 
-    console.log('Creating Intercom ticket with payload:', ticketPayload);
+    console.log('Creating Intercom ticket...');
+    console.log('Payload:', JSON.stringify(ticketPayload, null, 2));
 
     const ticketResponse = await axios.post(
       'https://api.intercom.io/tickets/enqueue',
@@ -117,41 +149,46 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     );
 
-    console.log('Intercom response:', ticketResponse.data);
+    console.log('✓ Ticket created successfully');
+    console.log('Job ID:', ticketResponse.data.id);
+    console.log('Status:', ticketResponse.data.status);
 
     // Step 4: Return response for Tickets v2 placeholders
     res.json({
       success: true,
       intercom_job_id: ticketResponse.data.id,
       intercom_status: ticketResponse.data.status,
+      intercom_job_url: ticketResponse.data.url,
       ticket: {
         id: ticket_id,
         discord_id: ticket_id,
-        status: 'created_in_intercom'
+        status: 'created_in_intercom',
+        panel: panel_name
       },
       user: {
         username: username,
-        discord_id: user_id
+        discord_id: user_id,
+        intercom_contact_id: contactId
       },
-      message: 'Ticket created successfully in Intercom'
+      message: '✅ Ticket created successfully in Intercom!'
     });
 
   } catch (error) {
-    console.error('Error creating ticket:', error.response?.data || error.message);
-    res.status(500).json({
+    console.error('=== ERROR ===');
+    console.error('Message:', error.message);
+    console.error('Response:', error.response?.data);
+    console.error('Status:', error.response?.status);
+
+    res.status(error.response?.status || 500).json({
       success: false,
       error: error.message,
       details: error.response?.data,
       ticket: {
         status: 'failed'
-      }
+      },
+      message: '❌ Failed to create ticket in Intercom'
     });
   }
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
 });
 
 // Secret validation endpoint
@@ -159,14 +196,16 @@ app.post('/validate-secrets', async (req, res) => {
   try {
     const { intercom_token, ticket_type_id } = req.body;
 
+    console.log('Validating secrets...');
+
     if (!intercom_token || !ticket_type_id) {
       return res.status(400).json({ 
         valid: false, 
-        error: 'Missing required secrets' 
+        error: 'Missing required secrets: intercom_token and ticket_type_id' 
       });
     }
 
-    // Validate Intercom token
+    // Validate Intercom token by calling /me
     const meResponse = await axios.get('https://api.intercom.io/me', {
       headers: {
         'Authorization': `Bearer ${intercom_token}`,
@@ -174,20 +213,29 @@ app.post('/validate-secrets', async (req, res) => {
       }
     });
 
+    console.log('Token valid for workspace:', meResponse.data.name);
+
     // Validate ticket type exists
-    await axios.get(`https://api.intercom.io/ticket_types/${ticket_type_id}`, {
-      headers: {
-        'Authorization': `Bearer ${intercom_token}`,
-        'Intercom-Version': '2.11'
+    const ticketTypeResponse = await axios.get(
+      `https://api.intercom.io/ticket_types/${ticket_type_id}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${intercom_token}`,
+          'Intercom-Version': '2.11'
+        }
       }
-    });
+    );
+
+    console.log('Ticket type valid:', ticketTypeResponse.data.name);
 
     res.status(200).json({ 
       valid: true,
-      workspace: meResponse.data.name
+      workspace: meResponse.data.name,
+      ticket_type: ticketTypeResponse.data.name
     });
 
   } catch (error) {
+    console.error('Validation error:', error.response?.data || error.message);
     res.status(400).json({ 
       valid: false, 
       error: error.response?.data?.errors?.[0]?.message || 'Invalid credentials'
@@ -195,7 +243,21 @@ app.post('/validate-secrets', async (req, res) => {
   }
 });
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not found',
+    available_endpoints: [
+      'GET / - Health check',
+      'GET /health - Health check',
+      'POST /tickets-to-intercom - Create ticket',
+      'POST /validate-secrets - Validate credentials'
+    ]
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Middleware running on port ${PORT}`);
+  console.log(`🚀 Middleware server running on port ${PORT}`);
+  console.log(`📡 Ready to receive tickets from Discord Tickets v2`);
 });
