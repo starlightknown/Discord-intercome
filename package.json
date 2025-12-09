@@ -2,10 +2,10 @@
   "name": "intercom-tickets-middleware",
   "version": "1.0.0",
   "description": "Middleware for Tickets v2 to Intercom Tickets integration",
-  "main": "index.js",
+  "main": "api.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node index.js"
+    "start": "node api.js",
+    "dev": "node api.js"
   },
   "keywords": ["intercom", "discord", "tickets"],
   "author": "",
