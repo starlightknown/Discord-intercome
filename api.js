@@ -1,6 +1,3 @@
-// ========================================
-// FILE: index.js - COMPLETE FIXED VERSION
-// ========================================
 const express = require('express');
 const axios = require('axios');
 const app = express();
@@ -20,7 +17,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', api_version: '2.14' });
 });
 
-// Main endpoint - Tickets v2 to Intercom
+// Tickets v2 to Intercom
 app.post('/tickets-to-intercom', async (req, res) => {
   try {
     // Get Intercom credentials from headers
@@ -39,7 +36,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Ticket Type ID:', ticketTypeId);
     console.log('Data:', JSON.stringify(req.body, null, 2));
 
-    // Extract ticket data from Tickets v2
     const {
       guild_id,
       user_id,
@@ -49,11 +45,10 @@ app.post('/tickets-to-intercom', async (req, res) => {
       form_data
     } = req.body;
 
-    // Step 1: Find or create contact
+    // Find or create contact
     let contactId = null;
     
     try {
-      // Search for existing contact
       console.log('Searching for contact with Discord ID:', user_id);
       const searchResponse = await axios.post(
         'https://api.intercom.io/contacts/search',
@@ -77,7 +72,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
         contactId = searchResponse.data.data[0].id;
         console.log('Found existing contact:', contactId);
       } else {
-        // Create new contact
         console.log('Creating new contact...');
         const createResponse = await axios.post(
           'https://api.intercom.io/contacts',
@@ -98,13 +92,11 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     } catch (contactError) {
       console.error('Contact error:', contactError.response?.data || contactError.message);
-      // Continue anyway - we'll use external_id
     }
 
-    // Step 2: Prepare ticket description
+    // Prepare ticket description
     let ticketDescription = 'Ticket opened from Discord';
     
-    // Add form data if present
     if (form_data && typeof form_data === 'object' && Object.keys(form_data).length > 0) {
       ticketDescription += '\n\n**Form Responses:**\n';
       Object.entries(form_data).forEach(([question, answer]) => {
@@ -114,12 +106,10 @@ app.post('/tickets-to-intercom', async (req, res) => {
     
     ticketDescription += `\n\n---\n`;
     ticketDescription += `*Created via Discord Tickets v2*\n`;
-    ticketDescription += `Guild ID: ${guild_id}\n`;
-    ticketDescription += `Channel ID: ${ticket_channel_id}\n`;
     ticketDescription += `Discord User ID: ${user_id}\n`;
     ticketDescription += `Ticket ID: ${ticket_id}`;
 
-    // Step 3: Create ticket in Intercom
+    // Create ticket in Intercom
     const ticketPayload = {
       ticket_type_id: ticketTypeId,
       contacts: contactId 
@@ -150,7 +140,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Job ID:', ticketResponse.data.id);
     console.log('Status:', ticketResponse.data.status);
 
-    // Step 4: Return response for Tickets v2 placeholders
     res.json({
       success: true,
       intercom_job_id: ticketResponse.data.id,
@@ -201,7 +190,6 @@ app.post('/validate-secrets', async (req, res) => {
       });
     }
 
-    // Validate Intercom token by calling /me
     const meResponse = await axios.get('https://api.intercom.io/me', {
       headers: {
         'Authorization': `Bearer ${intercom_token}`,
@@ -211,7 +199,6 @@ app.post('/validate-secrets', async (req, res) => {
 
     console.log('Token valid for workspace:', meResponse.data.name);
 
-    // Validate ticket type exists
     const ticketTypeResponse = await axios.get(
       `https://api.intercom.io/ticket_types/${ticket_type_id}`,
       {
