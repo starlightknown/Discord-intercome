@@ -1,3 +1,6 @@
+// ========================================
+// FILE: index.js - COMPLETE FIXED VERSION
+// ========================================
 const express = require('express');
 const axios = require('axios');
 const app = express();
@@ -9,12 +12,12 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'healthy',
     service: 'Intercom Tickets Middleware',
-    version: '1.0.0'
+    version: '1.1.0 - API 2.14'
   });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy' });
+  res.json({ status: 'healthy', api_version: '2.14' });
 });
 
 // Main endpoint - Tickets v2 to Intercom
@@ -37,21 +40,13 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Data:', JSON.stringify(req.body, null, 2));
 
     // Extract ticket data from Tickets v2
-    // Tickets v2 sends: guild_id, user_id, ticket_id, ticket_channel_id, is_new_ticket, form_data
     const {
       guild_id,
       user_id,
       ticket_id,
       ticket_channel_id,
       is_new_ticket,
-      form_data,
-      // These might not be included:
-      username,
-      subject,
-      content,
-      panel_name,
-      opened_at,
-      user_email
+      form_data
     } = req.body;
 
     // Step 1: Find or create contact
@@ -73,7 +68,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
           headers: {
             'Authorization': `Bearer ${intercomToken}`,
             'Content-Type': 'application/json',
-            'Intercom-Version': '2.11'
+            'Intercom-Version': '2.14'
           }
         }
       );
@@ -88,9 +83,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
           'https://api.intercom.io/contacts',
           {
             external_id: user_id,
-            name: username || `Discord User ${user_id}`,
-            ...(user_email && { email: user_email })
-            // Removed custom_attributes - they need to be created first in Intercom
+            name: `Discord User ${user_id}`
           },
           {
             headers: {
@@ -109,9 +102,9 @@ app.post('/tickets-to-intercom', async (req, res) => {
     }
 
     // Step 2: Prepare ticket description
-    let ticketDescription = content || 'Ticket opened from Discord';
+    let ticketDescription = 'Ticket opened from Discord';
     
-    // Add form data if present (form_data is an object with question: answer pairs)
+    // Add form data if present
     if (form_data && typeof form_data === 'object' && Object.keys(form_data).length > 0) {
       ticketDescription += '\n\n**Form Responses:**\n';
       Object.entries(form_data).forEach(([question, answer]) => {
@@ -122,7 +115,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
     ticketDescription += `\n\n---\n`;
     ticketDescription += `*Created via Discord Tickets v2*\n`;
     ticketDescription += `Guild ID: ${guild_id}\n`;
-    ticketDescription += `Channel ID: ${ticket_channel_id || 'Unknown'}\n`;
+    ticketDescription += `Channel ID: ${ticket_channel_id}\n`;
     ticketDescription += `Discord User ID: ${user_id}\n`;
     ticketDescription += `Ticket ID: ${ticket_id}`;
 
@@ -133,7 +126,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
         ? [{ id: contactId }]
         : [{ external_id: user_id }],
       ticket_attributes: {
-        _default_title_: subject || `Discord Ticket #${ticket_id}`,
+        _default_title_: `Discord Ticket #${ticket_id}`,
         _default_description_: ticketDescription
       }
     };
@@ -148,7 +141,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
         headers: {
           'Authorization': `Bearer ${intercomToken}`,
           'Content-Type': 'application/json',
-          'Intercom-Version': '2.11'
+          'Intercom-Version': '2.14'
         }
       }
     );
@@ -167,10 +160,9 @@ app.post('/tickets-to-intercom', async (req, res) => {
         id: ticket_id,
         discord_id: ticket_id,
         status: 'created_in_intercom',
-        panel: panel_name
+        guild_id: guild_id
       },
       user: {
-        username: username,
         discord_id: user_id,
         intercom_contact_id: contactId
       },
@@ -213,7 +205,7 @@ app.post('/validate-secrets', async (req, res) => {
     const meResponse = await axios.get('https://api.intercom.io/me', {
       headers: {
         'Authorization': `Bearer ${intercom_token}`,
-        'Intercom-Version': '2.11'
+        'Intercom-Version': '2.14'
       }
     });
 
@@ -225,7 +217,7 @@ app.post('/validate-secrets', async (req, res) => {
       {
         headers: {
           'Authorization': `Bearer ${intercom_token}`,
-          'Intercom-Version': '2.11'
+          'Intercom-Version': '2.14'
         }
       }
     );
@@ -263,5 +255,6 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Middleware server running on port ${PORT}`);
-  console.log(`📡 Ready to receive tickets from Discord Tickets v2`);
+  console.log(`📡 Using Intercom API version 2.14`);
+  console.log(`✅ Ready to receive tickets from Discord Tickets v2`);
 });
