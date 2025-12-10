@@ -37,16 +37,21 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Data:', JSON.stringify(req.body, null, 2));
 
     // Extract ticket data from Tickets v2
+    // Tickets v2 sends: guild_id, user_id, ticket_id, ticket_channel_id, is_new_ticket, form_data
     const {
+      guild_id,
       user_id,
-      username,
       ticket_id,
+      ticket_channel_id,
+      is_new_ticket,
+      form_data,
+      // These might not be included:
+      username,
       subject,
       content,
       panel_name,
       opened_at,
-      user_email,
-      form_data
+      user_email
     } = req.body;
 
     // Step 1: Find or create contact
