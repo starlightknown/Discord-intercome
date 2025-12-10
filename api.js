@@ -88,18 +88,15 @@ app.post('/tickets-to-intercom', async (req, res) => {
           'https://api.intercom.io/contacts',
           {
             external_id: user_id,
-            name: username,
-            ...(user_email && { email: user_email }),
-            custom_attributes: {
-              discord_username: username,
-              source: 'discord_tickets_v2'
-            }
+            name: username || `Discord User ${user_id}`,
+            ...(user_email && { email: user_email })
+            // Removed custom_attributes - they need to be created first in Intercom
           },
           {
             headers: {
               'Authorization': `Bearer ${intercomToken}`,
               'Content-Type': 'application/json',
-              'Intercom-Version': '2.11'
+              'Intercom-Version': '2.14'
             }
           }
         );
@@ -112,20 +109,22 @@ app.post('/tickets-to-intercom', async (req, res) => {
     }
 
     // Step 2: Prepare ticket description
-    let ticketDescription = content || 'No description provided';
+    let ticketDescription = content || 'Ticket opened from Discord';
     
-    if (form_data && Array.isArray(form_data) && form_data.length > 0) {
+    // Add form data if present (form_data is an object with question: answer pairs)
+    if (form_data && typeof form_data === 'object' && Object.keys(form_data).length > 0) {
       ticketDescription += '\n\n**Form Responses:**\n';
-      form_data.forEach(field => {
-        ticketDescription += `• ${field.label}: ${field.value}\n`;
+      Object.entries(form_data).forEach(([question, answer]) => {
+        ticketDescription += `• ${question}: ${answer}\n`;
       });
     }
     
     ticketDescription += `\n\n---\n`;
     ticketDescription += `*Created via Discord Tickets v2*\n`;
-    ticketDescription += `Panel: ${panel_name || 'Unknown'}\n`;
-    ticketDescription += `Discord User: ${username} (${user_id})\n`;
-    ticketDescription += `Discord Ticket ID: ${ticket_id}`;
+    ticketDescription += `Guild ID: ${guild_id}\n`;
+    ticketDescription += `Channel ID: ${ticket_channel_id || 'Unknown'}\n`;
+    ticketDescription += `Discord User ID: ${user_id}\n`;
+    ticketDescription += `Ticket ID: ${ticket_id}`;
 
     // Step 3: Create ticket in Intercom
     const ticketPayload = {
