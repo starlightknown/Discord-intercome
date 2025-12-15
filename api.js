@@ -51,12 +51,21 @@ app.post('/tickets-to-intercom', async (req, res) => {
     // Get email from body or form data
     let userEmail = user_email || email;
     
-    // If not in body, check form data
+    // If not in body, check form data with MORE field name variations
     if (!userEmail && form_data && typeof form_data === 'object') {
-      const emailFields = ['email', 'Email', 'Email Address', 'email address', 'E-mail', 'userEmail'];
+      const emailFields = [
+        'email', 'Email', 'EMAIL',
+        'Email Address', 'email address', 'EMAIL ADDRESS',
+        'Email ID', 'email id', 'EMAIL ID', // Added Email ID
+        'E-mail', 'e-mail', 'E-Mail',
+        'userEmail', 'user_email',
+        'contact_email', 'Contact Email'
+      ];
+      
       for (const field of emailFields) {
         if (form_data[field]) {
           userEmail = form_data[field];
+          console.log(`✓ Found email in form field "${field}":`, userEmail);
           break;
         }
       }
