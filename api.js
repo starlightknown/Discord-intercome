@@ -43,44 +43,42 @@ app.post('/tickets-to-intercom', async (req, res) => {
       ticket_id,
       ticket_channel_id,
       is_new_ticket,
-      form_data
+      form_data,
+      user_email, // Tickets v2 might send this
+      email       // or this
     } = req.body;
 
-    // Step 1: Find or create contact
+    // Get email from body or form data
+    let userEmail = user_email || email;
+    
+    // If not in body, check form data
+    if (!userEmail && form_data && typeof form_data === 'object') {
+      const emailFields = ['email', 'Email', 'Email Address', 'email address', 'E-mail', 'userEmail'];
+      for (const field of emailFields) {
+        if (form_data[field]) {
+          userEmail = form_data[field];
+          break;
+        }
+      }
+    }
+
+    console.log('User email:', userEmail || 'Not provided');
+
+    // Step 1: Find or create contact using email
     let contactId = null;
     
     try {
-      // Search for existing contact
-      console.log('Searching for contact with Discord ID:', user_id);
-      const searchResponse = await axios.post(
-        'https://api.intercom.io/contacts/search',
-        {
-          query: {
-            field: 'external_id',
-            operator: '=',
-            value: user_id
-          }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${intercomToken}`,
-            'Content-Type': 'application/json',
-            'Intercom-Version': '2.14'
-          }
-        }
-      );
-
-      if (searchResponse.data.data && searchResponse.data.data.length > 0) {
-        contactId = searchResponse.data.data[0].id;
-        console.log('Found existing contact:', contactId);
-      } else {
-        // Create new contact
-        console.log('Creating new contact...');
-        const createResponse = await axios.post(
-          'https://api.intercom.io/contacts',
+      if (userEmail) {
+        // Search by email first
+        console.log('Searching for contact with email:', userEmail);
+        const searchResponse = await axios.post(
+          'https://api.intercom.io/contacts/search',
           {
-            external_id: user_id,
-            name: `Discord User ${user_id}`
+            query: {
+              field: 'email',
+              operator: '=',
+              value: userEmail
+            }
           },
           {
             headers: {
@@ -90,12 +88,80 @@ app.post('/tickets-to-intercom', async (req, res) => {
             }
           }
         );
-        contactId = createResponse.data.id;
-        console.log('Created new contact:', contactId);
+
+        if (searchResponse.data.data && searchResponse.data.data.length > 0) {
+          // Contact exists! Use it
+          contactId = searchResponse.data.data[0].id;
+          console.log('✓ Found existing contact by email:', contactId);
+          console.log('  Name:', searchResponse.data.data[0].name);
+        } else {
+          // Create new contact with email
+          console.log('✗ No contact found, creating new one with email...');
+          const createResponse = await axios.post(
+            'https://api.intercom.io/contacts',
+            {
+              email: userEmail,
+              external_id: user_id,
+              name: `Discord User ${user_id}`
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${intercomToken}`,
+                'Content-Type': 'application/json',
+                'Intercom-Version': '2.14'
+              }
+            }
+          );
+          contactId = createResponse.data.id;
+          console.log('✓ Created new contact with email:', contactId);
+        }
+      } else {
+        // No email provided - fallback to Discord ID
+        console.log('⚠️  No email provided, using Discord ID:', user_id);
+        const searchResponse = await axios.post(
+          'https://api.intercom.io/contacts/search',
+          {
+            query: {
+              field: 'external_id',
+              operator: '=',
+              value: user_id
+            }
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${intercomToken}`,
+              'Content-Type': 'application/json',
+              'Intercom-Version': '2.14'
+            }
+          }
+        );
+
+        if (searchResponse.data.data && searchResponse.data.data.length > 0) {
+          contactId = searchResponse.data.data[0].id;
+          console.log('✓ Found existing contact by Discord ID:', contactId);
+        } else {
+          console.log('✗ Creating new contact without email...');
+          const createResponse = await axios.post(
+            'https://api.intercom.io/contacts',
+            {
+              external_id: user_id,
+              name: `Discord User ${user_id}`
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${intercomToken}`,
+                'Content-Type': 'application/json',
+                'Intercom-Version': '2.14'
+              }
+            }
+          );
+          contactId = createResponse.data.id;
+          console.log('✓ Created new contact without email:', contactId);
+        }
       }
     } catch (contactError) {
       console.error('Contact error:', contactError.response?.data || contactError.message);
-      // Continue anyway - we'll use external_id
+      // Continue anyway - we'll use external_id or email in ticket creation
     }
 
     // Step 2: Prepare ticket description
@@ -111,6 +177,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
     
     ticketDescription += `\n\n---\n`;
     ticketDescription += `*Created via Discord Tickets v2*\n`;
+    ticketDescription += `Guild ID: ${guild_id}\n`;
     ticketDescription += `Channel ID: ${ticket_channel_id}\n`;
     ticketDescription += `Discord User ID: ${user_id}\n`;
     ticketDescription += `Ticket ID: ${ticket_id}`;
@@ -176,6 +243,96 @@ app.post('/tickets-to-intercom', async (req, res) => {
         status: 'failed'
       },
       message: 'Failed to create ticket in Intercom'
+    });
+  }
+});
+
+// Close ticket endpoint
+app.post('/close-ticket', async (req, res) => {
+  try {
+    const intercomToken = req.headers['authorization']?.replace('Bearer ', '');
+    const { ticket_id, user_id, closed_by } = req.body;
+
+    console.log('=== Close Ticket Request ===');
+    console.log('Discord Ticket ID:', ticket_id);
+    console.log('User ID:', user_id);
+    console.log('Closed by:', closed_by);
+
+    // Unfortunately, we don't have a direct mapping from Discord ticket_id to Intercom ticket_id
+    // We would need to search for the ticket or store the mapping
+    
+    // Search for tickets by contact
+    const searchResponse = await axios.post(
+      'https://api.intercom.io/tickets/search',
+      {
+        query: {
+          operator: 'AND',
+          value: [
+            {
+              field: 'contact_ids',
+              operator: '=',
+              value: user_id
+            },
+            {
+              field: 'open',
+              operator: '=',
+              value: true
+            }
+          ]
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${intercomToken}`,
+          'Content-Type': 'application/json',
+          'Intercom-Version': '2.14'
+        }
+      }
+    );
+
+    // Find ticket with matching Discord ID in description
+    const matchingTicket = searchResponse.data.tickets?.find(ticket => 
+      ticket.ticket_attributes?._default_description_?.includes(`Ticket ID: ${ticket_id}`)
+    );
+
+    if (matchingTicket) {
+      // Close the ticket by updating its state
+      await axios.put(
+        `https://api.intercom.io/tickets/${matchingTicket.id}`,
+        {
+          ticket_state_id: matchingTicket.ticket_type.ticket_states.data.find(
+            state => state.category === 'resolved'
+          )?.id
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${intercomToken}`,
+            'Content-Type': 'application/json',
+            'Intercom-Version': '2.14'
+          }
+        }
+      );
+
+      console.log('✓ Intercom ticket closed:', matchingTicket.id);
+      
+      res.json({
+        success: true,
+        message: 'Ticket closed in Intercom',
+        intercom_ticket_id: matchingTicket.id
+      });
+    } else {
+      console.log('⚠️ No matching Intercom ticket found');
+      res.json({
+        success: false,
+        message: 'No matching Intercom ticket found'
+      });
+    }
+
+  } catch (error) {
+    console.error('Error closing ticket:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
