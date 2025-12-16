@@ -238,6 +238,22 @@ app.post('/tickets-to-intercom', async (req, res) => {
     
     res.status(200).json(responsePayload);
 
+    // Register this ticket channel with Discord bot for message monitoring
+    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
+    
+    try {
+      await axios.post(`${discordBotUrl}/register-ticket`, {
+        discord_channel_id: ticket_channel_id,
+        intercom_ticket_id: ticketResponse.data.id,
+        intercom_contact_id: contactId,
+        user_id: user_id
+      });
+      console.log('✓ Ticket registered with Discord bot for two-way sync');
+    } catch (error) {
+      console.error('⚠️  Failed to register with Discord bot:', error.message);
+      // Non-critical error, continue anyway
+    }
+
   } catch (error) {
     console.error('=== ERROR ===');
     console.error('Message:', error.message);
@@ -395,6 +411,112 @@ app.post('/validate-secrets', async (req, res) => {
       valid: false, 
       error: error.response?.data?.errors?.[0]?.message || 'Invalid credentials'
     });
+  }
+});
+
+// Intercom webhook endpoint for ticket replies
+app.post('/intercom-webhook', async (req, res) => {
+  try {
+    console.log('=== Intercom Webhook Received ===');
+    console.log('Topic:', req.body.topic);
+    
+    // Respond immediately to Intercom (required)
+    res.status(200).json({ received: true });
+
+    const { topic, data } = req.body;
+
+    // Only handle ticket reply events from admins
+    if (topic === 'conversation_part.tag.created' || topic === 'conversation_part.redacted') {
+      console.log('Ignoring non-reply event');
+      return;
+    }
+
+    // Optionally log minimal webhook details in debug mode to avoid leaking PII / large payloads
+    if (process.env.INTERCOM_WEBHOOK_DEBUG === 'true') {
+      console.log('Intercom webhook metadata:', {
+        topic,
+        conversationId: data?.item?.conversation?.id,
+        conversationPartId: data?.item?.conversation_part?.id,
+      });
+    }
+
+    // Extract ticket part and ticket info
+    const conversationPart = data?.item?.conversation_part;
+    const conversation = data?.item?.conversation;
+
+    if (!conversationPart || !conversation) {
+      console.log('No conversation part or conversation found');
+      return;
+    }
+
+    // Only forward admin/teammate replies, not user messages
+    if (conversationPart.author?.type !== 'admin' && conversationPart.author?.type !== 'bot') {
+      console.log('Ignoring non-admin message');
+      return;
+    }
+
+    console.log('Processing admin reply...');
+    console.log('Author:', conversationPart.author?.name);
+    console.log('Message:', conversationPart.body);
+
+    // Try to extract Discord channel ID from conversation
+    // We need to search for the ticket to get the description
+    const intercomToken = req.headers['x-intercom-token'] || process.env.INTERCOM_TOKEN;
+    
+    if (!intercomToken) {
+      console.error('No Intercom token available for webhook');
+      return;
+    }
+
+    // Get the full ticket details to find Discord channel ID
+    let ticketDetails;
+    try {
+      const ticketResponse = await axios.get(
+        `https://api.intercom.io/tickets/${conversation.id}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${intercomToken}`,
+            'Intercom-Version': '2.14'
+          }
+        }
+      );
+      ticketDetails = ticketResponse.data;
+    } catch (error) {
+      console.error('Error fetching ticket details:', error.response?.data || error.message);
+      return;
+    }
+
+    // Extract Discord channel ID from ticket description
+    const description = ticketDetails.ticket_attributes?._default_description_ || '';
+    const channelMatch = description.match(/Channel ID: (\d+)/);
+    
+    if (!channelMatch) {
+      console.error('No Discord channel ID found in ticket description');
+      return;
+    }
+
+    const discordChannelId = channelMatch[1];
+    console.log('Discord Channel ID:', discordChannelId);
+
+    // Get admin name
+    const adminName = conversationPart.author?.name || 'Support Agent';
+
+    // Send to Discord via Discord Bot API endpoint
+    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
+    
+    try {
+      await axios.post(`${discordBotUrl}/send-to-discord`, {
+        channel_id: discordChannelId,
+        message: conversationPart.body,
+        author_name: adminName
+      });
+      console.log('✓ Message sent to Discord');
+    } catch (error) {
+      console.error('Error sending to Discord:', error.message);
+    }
+
+  } catch (error) {
+    console.error('Webhook processing error:', error);
   }
 });
 
