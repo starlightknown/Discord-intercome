@@ -528,7 +528,7 @@ app.use((req, res) => {
       'GET / - Health check',
       'GET /health - Health check',
       'POST /tickets-to-intercom - Create ticket',
-      'POST /validate-secrets - Validate credentials'
+      'POST /validate-secrets - Validate credentials',
       'POST /intercom-webhook - Intercom webhook'
     ]
   });
