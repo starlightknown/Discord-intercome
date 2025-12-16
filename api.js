@@ -529,6 +529,7 @@ app.use((req, res) => {
       'GET /health - Health check',
       'POST /tickets-to-intercom - Create ticket',
       'POST /validate-secrets - Validate credentials'
+      'POST /intercom-webhook - Intercom webhook'
     ]
   });
 });
