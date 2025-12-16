@@ -431,8 +431,14 @@ app.post('/intercom-webhook', async (req, res) => {
       return;
     }
 
-    // Log the full payload for debugging
-    console.log('Full webhook data:', JSON.stringify(data, null, 2));
+    // Optionally log minimal webhook details in debug mode to avoid leaking PII / large payloads
+    if (process.env.INTERCOM_WEBHOOK_DEBUG === 'true') {
+      console.log('Intercom webhook metadata:', {
+        topic,
+        conversationId: data?.item?.conversation?.id,
+        conversationPartId: data?.item?.conversation_part?.id,
+      });
+    }
 
     // Extract ticket part and ticket info
     const conversationPart = data?.item?.conversation_part;
