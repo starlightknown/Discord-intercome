@@ -4,8 +4,7 @@
   "description": "Middleware for Tickets v2 to Intercom Tickets integration",
   "main": "api.js",
   "scripts": {
-    "start": "node api.js",
-    "bot": "node discord-bot.js",
+    "start": "node start.js",
     "dev": "node api.js"
   },
   "keywords": ["intercom", "discord", "tickets"],
