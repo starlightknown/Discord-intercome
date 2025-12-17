@@ -17,16 +17,76 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', api_version: '2.14' });
 });
 
-// WEBHOOK ENDPOINT - MUST BE BEFORE OTHER POST ROUTES
-app.post('/intercom-webhook', (req, res) => {
-  console.log('=== WEBHOOK RECEIVED ===');
-  console.log('Topic:', req.body.topic);
-  console.log('Timestamp:', new Date().toISOString());
-  
-  // Respond immediately
-  res.status(200).json({ received: true });
-  
-  console.log('✓ Response sent to Intercom');
+app.post('/intercom-webhook', async (req, res) => {
+  try {
+    console.log('=== WEBHOOK RECEIVED ===');
+    console.log('Topic:', req.body.topic);
+    
+    // Respond immediately to Intercom (MUST be first)
+    res.status(200).json({ received: true });
+
+    const { topic, data } = req.body;
+
+    // Handle test/ping
+    if (!topic || topic === 'ping') {
+      console.log('✓ Webhook test received');
+      return;
+    }
+
+    // Only handle ticket admin replies
+    if (topic !== 'ticket.admin.replied') {
+      console.log('Ignoring topic:', topic);
+      return;
+    }
+
+    console.log('Processing admin reply...');
+    console.log('Full data:', JSON.stringify(data, null, 2));
+
+    // Get the ticket and reply details
+    const ticket = data?.item?.ticket;
+    const ticketPart = data?.item?.ticket_part;
+
+    if (!ticket || !ticketPart) {
+      console.log('No ticket or ticket_part found');
+      return;
+    }
+
+    // Get admin name and message
+    const adminName = ticketPart.author?.name || 'Support Agent';
+    const message = ticketPart.body;
+
+    console.log('Admin:', adminName);
+    console.log('Message:', message);
+
+    // Extract Discord channel ID from ticket description
+    const description = ticket.ticket_attributes?._default_description_ || '';
+    const channelMatch = description.match(/Channel ID: (\d+)/);
+    
+    if (!channelMatch) {
+      console.error('❌ No Discord channel ID found in ticket description');
+      return;
+    }
+
+    const discordChannelId = channelMatch[1];
+    console.log('Discord Channel ID:', discordChannelId);
+
+    // Send to Discord bot
+    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
+    
+    try {
+      await axios.post(`${discordBotUrl}/send-to-discord`, {
+        channel_id: discordChannelId,
+        message: message,
+        author_name: adminName
+      });
+      console.log('✅ Message sent to Discord');
+    } catch (error) {
+      console.error('❌ Error sending to Discord:', error.message);
+    }
+
+  } catch (error) {
+    console.error('❌ Webhook processing error:', error.message);
+  }
 });
 
 // Main endpoint - Tickets v2 to Intercom
