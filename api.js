@@ -280,7 +280,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Creating Intercom ticket...');
 
     const ticketResponse = await axios.post(
-      'https://api.intercom.io/tickets',
+      'https://api.intercom.io/tickets',  // Make sure this doesn't have /enqueue
       ticketPayload,
       {
         headers: {
@@ -291,9 +291,24 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     );
 
-    console.log('✓ Ticket created successfully');
-    console.log('Ticket ID:', ticketResponse.data.id);  // This is now the actual ticket ID
+const ticketId = ticketResponse.data.id;
+console.log('✓ Ticket created with ID:', ticketId);
 
+// Verify the ticket exists
+try {
+  const verifyResponse = await axios.get(
+    `https://api.intercom.io/tickets/${ticketId}`,
+    {
+      headers: {
+        'Authorization': `Bearer ${intercomToken}`,
+        'Intercom-Version': '2.14'
+      }
+    }
+  );
+  console.log('✓ Ticket verified:', verifyResponse.data.id);
+} catch (verifyError) {
+  console.error('❌ Ticket verification failed:', verifyError.response?.data);
+}
     const responsePayload = {
       intercom_ticket_id: String(ticketResponse.data.id),
       intercom_status: ticketResponse.data.status,
