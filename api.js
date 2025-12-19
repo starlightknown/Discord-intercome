@@ -280,7 +280,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Creating Intercom ticket...');
 
     const ticketResponse = await axios.post(
-      'https://api.intercom.io/tickets/enqueue',
+      'https://api.intercom.io/tickets',
       ticketPayload,
       {
         headers: {
@@ -292,10 +292,10 @@ app.post('/tickets-to-intercom', async (req, res) => {
     );
 
     console.log('✓ Ticket created successfully');
-    console.log('Job ID:', ticketResponse.data.id);
+    console.log('Ticket ID:', ticketResponse.data.id);  // This is now the actual ticket ID
 
     const responsePayload = {
-      intercom_job_id: String(ticketResponse.data.id),
+      intercom_ticket_id: String(ticketResponse.data.id),
       intercom_status: ticketResponse.data.status,
       ticket: {
         status: 'created_in_intercom'
