@@ -20,7 +20,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'healthy',
     service: 'Intercom Tickets Middleware',
-    version: '1.3.0 - API 2.14 - Two-Way Sync'
+    version: '1.4.0 - API 2.14 - Two-Way Sync with Proxy'
   });
 });
 
@@ -280,7 +280,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
     console.log('Creating Intercom ticket...');
 
     const ticketResponse = await axios.post(
-      'https://api.intercom.io/tickets',  // Make sure this doesn't have /enqueue
+      'https://api.intercom.io/tickets',
       ticketPayload,
       {
         headers: {
@@ -291,29 +291,11 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     );
 
-const ticketId = ticketResponse.data.id;
-console.log('Full ticket response:', JSON.stringify(ticketResponse.data, null, 2));
+    console.log('✓ Ticket created successfully');
+    console.log('Ticket ID:', ticketResponse.data.id);
 
-console.log('✓ Ticket created with ID:', ticketId);
-
-// Verify the ticket exists
-try {
-  const verifyResponse = await axios.get(
-    `https://api.intercom.io/tickets/${ticketId}`,
-    {
-      headers: {
-        'Authorization': `Bearer ${intercomToken}`,
-        'Intercom-Version': '2.14'
-      }
-    }
-  );
-  console.log('✓ Ticket verified:', verifyResponse.data.id);
-} catch (verifyError) {
-  console.error('❌ Ticket verification failed:', verifyError.response?.data);
-}
     const responsePayload = {
       intercom_ticket_id: String(ticketResponse.data.id),
-      intercom_status: ticketResponse.data.status,
       ticket: {
         status: 'created_in_intercom'
       },
@@ -402,6 +384,36 @@ app.post('/validate-secrets', async (req, res) => {
   }
 });
 
+// Proxy endpoint to fetch and register ticket (forwards to Discord bot)
+app.post('/fetch-and-register-ticket', async (req, res) => {
+  try {
+    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
+    
+    console.log('=== Proxying fetch-and-register request to Discord bot ===');
+    console.log('Target URL:', `${discordBotUrl}/fetch-and-register-ticket`);
+    console.log('Payload:', req.body);
+    
+    const response = await axios.post(
+      `${discordBotUrl}/fetch-and-register-ticket`,
+      req.body,
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    console.log('✅ Successfully registered ticket');
+    res.json(response.data);
+  } catch (error) {
+    console.error('❌ Proxy error:', error.message);
+    res.status(error.response?.status || 500).json({ 
+      error: error.message,
+      details: error.response?.data 
+    });
+  }
+});
+
 // 404 handler - MUST BE LAST
 app.use((req, res) => {
   res.status(404).json({
@@ -413,7 +425,8 @@ app.use((req, res) => {
       'GET /health - Health check',
       'POST /intercom-webhook - Intercom webhook handler',
       'POST /tickets-to-intercom - Create ticket',
-      'POST /validate-secrets - Validate credentials'
+      'POST /validate-secrets - Validate credentials',
+      'POST /fetch-and-register-ticket - Register existing ticket'
     ]
   });
 });
@@ -425,4 +438,5 @@ app.listen(PORT, () => {
   console.log(`✅ Ready to receive tickets from Discord Tickets v2`);
   console.log(`🎯 Webhook endpoint: POST /intercom-webhook`);
   console.log(`🔄 Two-way sync enabled`);
+  console.log(`🔗 Proxy endpoint: POST /fetch-and-register-ticket`);
 });
