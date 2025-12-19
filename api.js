@@ -292,6 +292,8 @@ app.post('/tickets-to-intercom', async (req, res) => {
     );
 
 const ticketId = ticketResponse.data.id;
+console.log('Full ticket response:', JSON.stringify(ticketResponse.data, null, 2));
+
 console.log('✓ Ticket created with ID:', ticketId);
 
 // Verify the ticket exists
