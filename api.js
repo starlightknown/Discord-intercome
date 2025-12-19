@@ -4,12 +4,23 @@ const app = express();
 
 app.use(express.json());
 
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
 // Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
     status: 'healthy',
     service: 'Intercom Tickets Middleware',
-    version: '1.2.0 - API 2.14'
+    version: '1.3.0 - API 2.14 - Two-Way Sync'
   });
 });
 
@@ -17,6 +28,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', api_version: '2.14' });
 });
 
+// WEBHOOK ENDPOINT - Intercom to Discord
 app.post('/intercom-webhook', async (req, res) => {
   try {
     console.log('=== WEBHOOK RECEIVED ===');
@@ -33,27 +45,32 @@ app.post('/intercom-webhook', async (req, res) => {
       return;
     }
 
-    // Only handle ticket admin replies
-    if (topic !== 'ticket.admin.replied') {
+    // Handle both ticket and conversation admin replies
+    if (topic !== 'ticket.admin.replied' && topic !== 'conversation.admin.replied') {
       console.log('Ignoring topic:', topic);
       return;
     }
 
     console.log('Processing admin reply...');
-    console.log('Full data:', JSON.stringify(data, null, 2));
 
-    // Get the ticket and reply details
-    const ticket = data?.item?.ticket;
-    const ticketPart = data?.item?.ticket_part;
+    // Get the ticket/conversation and reply details
+    const ticket = data?.item?.ticket || data?.item?.conversation;
+    const ticketPart = data?.item?.ticket_part || data?.item?.conversation_part;
 
     if (!ticket || !ticketPart) {
-      console.log('No ticket or ticket_part found');
+      console.log('No ticket/conversation or part found');
+      return;
+    }
+
+    // Skip non-admin messages
+    if (ticketPart.author?.type !== 'admin' && ticketPart.author?.type !== 'bot') {
+      console.log('Ignoring non-admin message');
       return;
     }
 
     // Get admin name and message
     const adminName = ticketPart.author?.name || 'Support Agent';
-    const message = ticketPart.body;
+    const message = stripHtml(ticketPart.body);
 
     console.log('Admin:', adminName);
     console.log('Message:', message);
@@ -291,6 +308,22 @@ app.post('/tickets-to-intercom', async (req, res) => {
     
     res.status(200).json(responsePayload);
 
+    // Register this ticket channel with Discord bot for two-way sync
+    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
+    
+    try {
+      await axios.post(`${discordBotUrl}/register-ticket`, {
+        discord_channel_id: ticket_channel_id,
+        intercom_ticket_id: ticketResponse.data.id,
+        intercom_contact_id: contactId,
+        user_id: user_id
+      });
+      console.log('✓ Ticket registered with Discord bot for two-way sync');
+    } catch (error) {
+      console.error('⚠️  Failed to register with Discord bot:', error.message);
+      // Non-critical error, continue anyway
+    }
+
   } catch (error) {
     console.error('=== ERROR ===');
     console.error('Message:', error.message);
@@ -374,4 +407,5 @@ app.listen(PORT, () => {
   console.log(`📡 Using Intercom API version 2.14`);
   console.log(`✅ Ready to receive tickets from Discord Tickets v2`);
   console.log(`🎯 Webhook endpoint: POST /intercom-webhook`);
+  console.log(`🔄 Two-way sync enabled`);
 });
