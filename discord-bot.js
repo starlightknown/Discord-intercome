@@ -49,37 +49,14 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // Step 1: Get the ticket to find its conversation_id
-    const ticketResponse = await axios.get(
-      `https://api.intercom.io/tickets/${ticketInfo.intercom_ticket_id}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${intercomToken}`,
-          'Intercom-Version': '2.14'
-        }
-      }
-    );
-
-    const conversationId = ticketResponse.data.conversation_id;
-    
-    if (!conversationId) {
-      console.error('❌ No conversation_id found for ticket');
-      await message.react('❌').catch(() => {});
-      return;
-    }
-
-    console.log('✓ Conversation ID:', conversationId);
-
-    // Step 2: Reply to the conversation
+    // Reply directly to the ticket
     await axios.post(
-      `https://api.intercom.io/conversations/${conversationId}/reply`,
+      `https://api.intercom.io/tickets/${ticketInfo.intercom_ticket_id}/reply`,
       {
         message_type: 'comment',
         type: 'user',
         body: message.content,
-        user: {
-          id: ticketInfo.intercom_contact_id
-        }
+        intercom_user_id: ticketInfo.intercom_contact_id
       },
       {
         headers: {
@@ -184,6 +161,74 @@ app.post('/unregister-ticket', async (req, res) => {
   }
 });
 
+// Endpoint to fetch and register an existing Intercom ticket
+app.post('/fetch-and-register-ticket', async (req, res) => {
+  try {
+    const { ticket_id, discord_channel_id } = req.body;
+    const intercomToken = process.env.INTERCOM_TOKEN;
+
+    if (!intercomToken) {
+      return res.status(500).json({ error: 'No Intercom token configured' });
+    }
+
+    console.log('=== Fetching Existing Ticket ===');
+    console.log('Ticket ID:', ticket_id);
+    console.log('Discord Channel:', discord_channel_id);
+
+    // Fetch the ticket from Intercom
+    const ticketResponse = await axios.get(
+      `https://api.intercom.io/tickets/${ticket_id}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${intercomToken}`,
+          'Intercom-Version': '2.14'
+        }
+      }
+    );
+
+    const ticket = ticketResponse.data;
+    console.log('✓ Ticket found:', ticket.ticket_attributes?._default_title_);
+
+    // Get the contact ID from the ticket
+    const contactId = ticket.contacts?.contacts?.[0]?.id;
+    
+    if (!contactId) {
+      return res.status(400).json({ error: 'No contact found in ticket' });
+    }
+
+    // Extract Discord user ID from ticket description (if available)
+    const description = ticket.ticket_attributes?._default_description_ || '';
+    const userIdMatch = description.match(/Discord User ID: (\d+)/);
+    const userId = userIdMatch ? userIdMatch[1] : null;
+
+    // Register the ticket channel
+    ticketChannels.set(discord_channel_id, {
+      intercom_ticket_id: ticket_id,
+      intercom_contact_id: contactId,
+      user_id: userId,
+      registered_at: Date.now()
+    });
+
+    console.log('✅ Existing ticket registered for two-way sync');
+    console.log(`📊 Total tracked channels: ${ticketChannels.size}`);
+
+    res.json({ 
+      success: true,
+      ticket_id: ticket_id,
+      contact_id: contactId,
+      user_id: userId,
+      title: ticket.ticket_attributes?._default_title_
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching ticket:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data
+    });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ 
@@ -213,7 +258,7 @@ app.get('/tracked-channels', (req, res) => {
 // Login to Discord
 client.login(process.env.DISCORD_BOT_TOKEN);
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🤖 Discord bot API running on port ${PORT}`);
   console.log(`📡 Monitoring ${ticketChannels.size} ticket channels`);
