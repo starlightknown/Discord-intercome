@@ -258,7 +258,7 @@ app.get('/tracked-channels', (req, res) => {
 // Login to Discord
 client.login(process.env.DISCORD_BOT_TOKEN);
 
-const PORT = process.env.PORT || 3001;
+const PORT = 3001;
 app.listen(PORT, () => {
   console.log(`🤖 Discord bot API running on port ${PORT}`);
   console.log(`📡 Monitoring ${ticketChannels.size} ticket channels`);
