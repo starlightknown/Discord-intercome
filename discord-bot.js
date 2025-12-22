@@ -40,7 +40,9 @@ client.on('messageCreate', async (message) => {
     console.log('Channel ID:', message.channel.id);
     console.log('Author:', message.author.tag);
     console.log('Message:', message.content);
+    console.log('Attachments:', message.attachments.size);
     console.log('Intercom Ticket ID:', ticketInfo.intercom_ticket_id);
+    console.log('Intercom Contact ID:', ticketInfo.intercom_contact_id);
 
     const intercomToken = process.env.INTERCOM_TOKEN;
     
@@ -49,15 +51,53 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    // Check if we have a contact ID
+    if (!ticketInfo.intercom_contact_id) {
+      console.error('❌ No contact ID available for this ticket');
+      await message.reply('⚠️ Unable to send message - contact information missing.');
+      return;
+    }
+
+    // Build message body
+    let messageBody = message.content.trim();
+    
+    // If there are attachments, add them to the message
+    const attachmentUrls = [];
+    if (message.attachments.size > 0) {
+      message.attachments.forEach(attachment => {
+        attachmentUrls.push(attachment.url);
+        console.log('Attachment URL:', attachment.url);
+      });
+      
+      // If no text content, add a default message
+      if (!messageBody) {
+        messageBody = '[Image/File attachment]';
+      }
+    }
+
+    // Skip if completely empty (no text and no attachments)
+    if (!messageBody && attachmentUrls.length === 0) {
+      console.log('⚠️  Ignoring empty message');
+      return;
+    }
+
+    // Build request payload
+    const replyPayload = {
+      message_type: 'comment',
+      type: 'user',
+      body: messageBody,
+      intercom_user_id: ticketInfo.intercom_contact_id
+    };
+
+    // Add attachments if present
+    if (attachmentUrls.length > 0) {
+      replyPayload.attachment_urls = attachmentUrls;
+    }
+
     // Reply directly to the ticket
     await axios.post(
       `https://api.intercom.io/tickets/${ticketInfo.intercom_ticket_id}/reply`,
-      {
-        message_type: 'comment',
-        type: 'user',
-        body: message.content,
-        intercom_user_id: ticketInfo.intercom_contact_id
-      },
+      replyPayload,
       {
         headers: {
           'Authorization': `Bearer ${intercomToken}`,
