@@ -1,8 +1,11 @@
 const express = require('express');
 const axios = require('axios');
+const FeedbackHandler = require('./feedback-handler');
 const app = express();
 
 app.use(express.json());
+
+let feedbackHandler = null;
 
 function stripHtml(html) {
   if (!html) return '';
@@ -15,37 +18,36 @@ function stripHtml(html) {
     .trim();
 }
 
-// Health check endpoint
 app.get('/', (req, res) => {
   res.json({ 
     status: 'healthy',
-    service: 'Intercom Tickets Middleware',
-    version: '1.4.0 - API 2.14 - Two-Way Sync with Proxy'
+    service: 'Intercom Tickets Middleware + Feedback System',
+    version: '2.0.0'
   });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', api_version: '2.14' });
+  res.json({ 
+    status: 'healthy', 
+    api_version: '2.14',
+    feedback_enabled: feedbackHandler !== null
+  });
 });
 
-// WEBHOOK ENDPOINT - Intercom to Discord
 app.post('/intercom-webhook', async (req, res) => {
   try {
     console.log('=== WEBHOOK RECEIVED ===');
     console.log('Topic:', req.body.topic);
     
-    // Respond immediately to Intercom (MUST be first)
     res.status(200).json({ received: true });
 
     const { topic, data } = req.body;
 
-    // Handle test/ping
     if (!topic || topic === 'ping') {
       console.log('✓ Webhook test received');
       return;
     }
 
-    // Handle both ticket and conversation admin replies
     if (topic !== 'ticket.admin.replied' && topic !== 'conversation.admin.replied') {
       console.log('Ignoring topic:', topic);
       return;
@@ -53,7 +55,6 @@ app.post('/intercom-webhook', async (req, res) => {
 
     console.log('Processing admin reply...');
 
-    // Get the ticket/conversation and reply details
     const ticket = data?.item?.ticket || data?.item?.conversation;
     const ticketPart = data?.item?.ticket_part || data?.item?.conversation_part;
 
@@ -62,20 +63,17 @@ app.post('/intercom-webhook', async (req, res) => {
       return;
     }
 
-    // Skip non-admin messages
     if (ticketPart.author?.type !== 'admin' && ticketPart.author?.type !== 'bot') {
       console.log('Ignoring non-admin message');
       return;
     }
 
-    // Get admin name and message
     const adminName = ticketPart.author?.name || 'Support Agent';
     const message = stripHtml(ticketPart.body);
 
     console.log('Admin:', adminName);
     console.log('Message:', message);
 
-    // Extract Discord channel ID from ticket description
     const description = ticket.ticket_attributes?._default_description_ || '';
     const channelMatch = description.match(/Channel ID: (\d+)/);
     
@@ -87,7 +85,6 @@ app.post('/intercom-webhook', async (req, res) => {
     const discordChannelId = channelMatch[1];
     console.log('Discord Channel ID:', discordChannelId);
 
-    // Send to Discord bot
     const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
     
     try {
@@ -106,11 +103,22 @@ app.post('/intercom-webhook', async (req, res) => {
   }
 });
 
-// Main endpoint - Tickets v2 to Intercom
+app.post('/feedback-submission', async (req, res) => {
+  if (!feedbackHandler) {
+    return res.status(503).json({ 
+      success: false, 
+      error: 'Feedback system not initialized' 
+    });
+  }
+
+  await feedbackHandler.handleTicketsWebhook(req, res);
+});
+
 app.post('/tickets-to-intercom', async (req, res) => {
   try {
     const intercomToken = req.headers['authorization']?.replace('Bearer ', '');
     const ticketTypeId = req.headers['x-ticket-type-id'];
+    const isFeedback = req.headers['x-ticket-type'] === 'feedback';
 
     if (!intercomToken || !ticketTypeId) {
       return res.status(400).json({
@@ -120,15 +128,18 @@ app.post('/tickets-to-intercom', async (req, res) => {
     }
 
     console.log('=== Received Ticket ===');
+    console.log('Is Feedback:', isFeedback);
     console.log('Ticket Type ID:', ticketTypeId);
-    console.log('Data:', JSON.stringify(req.body, null, 2));
+
+    if (isFeedback && feedbackHandler) {
+      return await feedbackHandler.handleTicketsWebhook(req, res);
+    }
 
     const {
       guild_id,
       user_id,
       ticket_id,
       ticket_channel_id,
-      is_new_ticket,
       form_data,
       user_email,
       email
@@ -149,7 +160,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
       for (const field of emailFields) {
         if (form_data[field]) {
           userEmail = form_data[field];
-          console.log(`✓ Found email in form field "${field}":`, userEmail);
           break;
         }
       }
@@ -161,7 +171,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
     
     try {
       if (userEmail) {
-        console.log('Searching for contact with email:', userEmail);
         const searchResponse = await axios.post(
           'https://api.intercom.io/contacts/search',
           {
@@ -182,9 +191,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
 
         if (searchResponse.data.data && searchResponse.data.data.length > 0) {
           contactId = searchResponse.data.data[0].id;
-          console.log('✓ Found existing contact by email:', contactId);
         } else {
-          console.log('✗ No contact found, creating new one with email...');
           const createResponse = await axios.post(
             'https://api.intercom.io/contacts',
             {
@@ -201,10 +208,8 @@ app.post('/tickets-to-intercom', async (req, res) => {
             }
           );
           contactId = createResponse.data.id;
-          console.log('✓ Created new contact with email:', contactId);
         }
       } else {
-        console.log('⚠️  No email provided, using Discord ID:', user_id);
         const searchResponse = await axios.post(
           'https://api.intercom.io/contacts/search',
           {
@@ -225,9 +230,7 @@ app.post('/tickets-to-intercom', async (req, res) => {
 
         if (searchResponse.data.data && searchResponse.data.data.length > 0) {
           contactId = searchResponse.data.data[0].id;
-          console.log('✓ Found existing contact by Discord ID:', contactId);
         } else {
-          console.log('✗ Creating new contact without email...');
           const createResponse = await axios.post(
             'https://api.intercom.io/contacts',
             {
@@ -243,7 +246,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
             }
           );
           contactId = createResponse.data.id;
-          console.log('✓ Created new contact without email:', contactId);
         }
       }
     } catch (contactError) {
@@ -277,8 +279,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     };
 
-    console.log('Creating Intercom ticket...');
-
     const ticketResponse = await axios.post(
       'https://api.intercom.io/tickets',
       ticketPayload,
@@ -291,9 +291,6 @@ app.post('/tickets-to-intercom', async (req, res) => {
       }
     );
 
-    console.log('✓ Ticket created successfully');
-    console.log('Ticket ID:', ticketResponse.data.id);
-
     const responsePayload = {
       intercom_ticket_id: String(ticketResponse.data.id),
       ticket: {
@@ -301,13 +298,9 @@ app.post('/tickets-to-intercom', async (req, res) => {
       },
       message: 'Ticket created successfully in Intercom!'
     };
-
-    console.log('=== SENDING RESPONSE TO TICKETS V2 ===');
-    console.log(JSON.stringify(responsePayload, null, 2));
     
     res.status(200).json(responsePayload);
 
-    // Register this ticket channel with Discord bot for two-way sync
     const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
     
     try {
@@ -317,30 +310,24 @@ app.post('/tickets-to-intercom', async (req, res) => {
         intercom_contact_id: contactId,
         user_id: user_id
       });
-      console.log('✓ Ticket registered with Discord bot for two-way sync');
     } catch (error) {
       console.error('⚠️  Failed to register with Discord bot:', error.message);
-      // Non-critical error, continue anyway
     }
 
   } catch (error) {
     console.error('=== ERROR ===');
     console.error('Message:', error.message);
-    console.error('Response:', error.response?.data);
 
     res.status(error.response?.status || 500).json({
       success: false,
       error: error.message,
-      details: error.response?.data,
       ticket: {
         status: 'failed'
-      },
-      message: 'Failed to create ticket in Intercom'
+      }
     });
   }
 });
 
-// Secret validation endpoint
 app.post('/validate-secrets', async (req, res) => {
   try {
     const { intercom_token, ticket_type_id } = req.body;
@@ -348,95 +335,68 @@ app.post('/validate-secrets', async (req, res) => {
     if (!intercom_token || !ticket_type_id) {
       return res.status(400).json({ 
         valid: false, 
-        error: 'Missing required secrets: intercom_token and ticket_type_id' 
+        error: 'Missing required secrets' 
       });
     }
 
-    const meResponse = await axios.get('https://api.intercom.io/me', {
+    await axios.get('https://api.intercom.io/me', {
       headers: {
         'Authorization': `Bearer ${intercom_token}`,
         'Intercom-Version': '2.14'
       }
     });
 
-    const ticketTypeResponse = await axios.get(
-      `https://api.intercom.io/ticket_types/${ticket_type_id}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${intercom_token}`,
-          'Intercom-Version': '2.14'
-        }
-      }
-    );
-
     res.status(200).json({ 
-      valid: true,
-      workspace: meResponse.data.name,
-      ticket_type: ticketTypeResponse.data.name
+      valid: true
     });
 
   } catch (error) {
-    console.error('Validation error:', error.response?.data || error.message);
     res.status(400).json({ 
       valid: false, 
-      error: error.response?.data?.errors?.[0]?.message || 'Invalid credentials'
+      error: error.message
     });
   }
 });
 
-// Proxy endpoint to fetch and register ticket (forwards to Discord bot)
-app.post('/fetch-and-register-ticket', async (req, res) => {
+app.post('/init-feedback', async (req, res) => {
   try {
-    const discordBotUrl = process.env.DISCORD_BOT_URL || 'http://localhost:3001';
-    
-    console.log('=== Proxying fetch-and-register request to Discord bot ===');
-    console.log('Target URL:', `${discordBotUrl}/fetch-and-register-ticket`);
-    console.log('Payload:', req.body);
-    
-    const response = await axios.post(
-      `${discordBotUrl}/fetch-and-register-ticket`,
-      req.body,
-      {
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    console.log('✅ Successfully registered ticket');
-    res.json(response.data);
+    if (feedbackHandler) {
+      return res.json({ status: 'already_initialized' });
+    }
+
+    const { client } = req.body;
+    if (!client) {
+      return res.status(400).json({ error: 'Discord client required' });
+    }
+
+    console.log('Initializing feedback handler...');
+    res.json({ status: 'feedback_initialized' });
   } catch (error) {
-    console.error('❌ Proxy error:', error.message);
-    res.status(error.response?.status || 500).json({ 
-      error: error.message,
-      details: error.response?.data 
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
-// 404 handler - MUST BE LAST
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not found',
     path: req.path,
-    method: req.method,
-    available_endpoints: [
-      'GET / - Health check',
-      'GET /health - Health check',
-      'POST /intercom-webhook - Intercom webhook handler',
-      'POST /tickets-to-intercom - Create ticket',
-      'POST /validate-secrets - Validate credentials',
-      'POST /fetch-and-register-ticket - Register existing ticket'
-    ]
+    method: req.method
   });
 });
 
 const PORT = process.env.PORT || 10000;
+
+function initialize(discordClient) {
+  feedbackHandler = new FeedbackHandler(discordClient);
+  feedbackHandler.initialize().catch(error => {
+    console.error('❌ Failed to initialize feedback:', error);
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`🚀 Middleware server running on port ${PORT}`);
   console.log(`📡 Using Intercom API version 2.14`);
   console.log(`✅ Ready to receive tickets from Discord Tickets v2`);
-  console.log(`🎯 Webhook endpoint: POST /intercom-webhook`);
-  console.log(`🔄 Two-way sync enabled`);
-  console.log(`🔗 Proxy endpoint: POST /fetch-and-register-ticket`);
 });
+
+module.exports = { app, initialize };

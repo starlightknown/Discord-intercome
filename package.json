@@ -1,19 +1,21 @@
 {
   "name": "intercom-tickets-middleware",
-  "version": "1.0.0",
-  "description": "Middleware for Tickets v2 to Intercom Tickets integration",
+  "version": "2.0.0",
+  "description": "Middleware for Tickets v2 to Intercom Tickets integration + Feedback system",
   "main": "api.js",
   "scripts": {
     "start": "node start.js",
     "dev": "node api.js"
   },
-  "keywords": ["intercom", "discord", "tickets"],
+  "keywords": ["intercom", "discord", "tickets", "feedback"],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "axios": "^1.6.2",
-    "discord.js": "^14.14.1"
+    "discord.js": "^14.14.1",
+    "googleapis": "^118.0.0",
+    "google-auth-library": "^8.8.0"
   },
   "engines": {
     "node": ">=18.x"

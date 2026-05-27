@@ -1,48 +1,47 @@
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
 const express = require('express');
 const axios = require('axios');
-const app = express();
+const FeedbackHandler = require('./feedback-handler');
 
+const app = express();
 app.use(express.json());
 
-// Initialize Discord client
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ]
 });
 
-// Store ticket channel mappings (in production, use a database)
-// Format: { discord_channel_id: { intercom_ticket_id, intercom_contact_id, user_id } }
+let feedbackHandler = null;
 const ticketChannels = new Map();
 
 client.once('ready', () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+  initializeFeedback();
 });
 
-// Listen to messages in ticket channels (Discord → Intercom)
+async function initializeFeedback() {
+  try {
+    feedbackHandler = new FeedbackHandler(client);
+    await feedbackHandler.initialize();
+    console.log('✅ Feedback system initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize feedback:', error);
+  }
+}
+
 client.on('messageCreate', async (message) => {
   try {
-    // Ignore bot messages to prevent loops
     if (message.author.bot) return;
 
-    // Check if this is a ticket channel
     const ticketInfo = ticketChannels.get(message.channel.id);
     
     if (!ticketInfo) {
-      // Not a tracked ticket channel
       return;
     }
-
-    console.log('=== Message in Ticket Channel ===');
-    console.log('Channel ID:', message.channel.id);
-    console.log('Author:', message.author.tag);
-    console.log('Message:', message.content);
-    console.log('Attachments:', message.attachments.size);
-    console.log('Intercom Ticket ID:', ticketInfo.intercom_ticket_id);
-    console.log('Intercom Contact ID:', ticketInfo.intercom_contact_id);
 
     const intercomToken = process.env.INTERCOM_TOKEN;
     
@@ -51,37 +50,28 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // Check if we have a contact ID
     if (!ticketInfo.intercom_contact_id) {
-      console.error('❌ No contact ID available for this ticket');
       await message.reply('⚠️ Unable to send message - contact information missing.');
       return;
     }
 
-    // Build message body
     let messageBody = message.content.trim();
     
-    // If there are attachments, add them to the message
     const attachmentUrls = [];
     if (message.attachments.size > 0) {
       message.attachments.forEach(attachment => {
         attachmentUrls.push(attachment.url);
-        console.log('Attachment URL:', attachment.url);
       });
       
-      // If no text content, add a default message
       if (!messageBody) {
         messageBody = '[Image/File attachment]';
       }
     }
 
-    // Skip if completely empty (no text and no attachments)
     if (!messageBody && attachmentUrls.length === 0) {
-      console.log('⚠️  Ignoring empty message');
       return;
     }
 
-    // Build request payload
     const replyPayload = {
       message_type: 'comment',
       type: 'user',
@@ -89,12 +79,10 @@ client.on('messageCreate', async (message) => {
       intercom_user_id: ticketInfo.intercom_contact_id
     };
 
-    // Add attachments if present
     if (attachmentUrls.length > 0) {
       replyPayload.attachment_urls = attachmentUrls;
     }
 
-    // Reply directly to the ticket
     await axios.post(
       `https://api.intercom.io/tickets/${ticketInfo.intercom_ticket_id}/reply`,
       replyPayload,
@@ -107,24 +95,33 @@ client.on('messageCreate', async (message) => {
       }
     );
 
-    console.log('✅ Message forwarded to Intercom');
     await message.react('✅');
 
   } catch (error) {
-    console.error('❌ Error forwarding to Intercom:', error.response?.data || error.message);
+    console.error('❌ Error forwarding to Intercom:', error.message);
     await message.react('❌').catch(() => {});
   }
 });
 
-// Endpoint to send message from Intercom to Discord
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    if (user.bot) return;
+
+    if (!feedbackHandler) return;
+
+    const modChannelId = process.env.MOD_CHANNEL_ID;
+    if (reaction.message.channel.id === modChannelId) {
+      await feedbackHandler.handleModApproval(reaction, user);
+    }
+
+  } catch (error) {
+    console.error('❌ Error handling reaction:', error.message);
+  }
+});
+
 app.post('/send-to-discord', async (req, res) => {
   try {
     const { channel_id, message, author_name } = req.body;
-
-    console.log('=== Sending to Discord ===');
-    console.log('Channel ID:', channel_id);
-    console.log('Author:', author_name);
-    console.log('Message:', message);
 
     const channel = await client.channels.fetch(channel_id);
     
@@ -132,12 +129,10 @@ app.post('/send-to-discord', async (req, res) => {
       return res.status(404).json({ error: 'Channel not found' });
     }
 
-    // Send message to Discord
     await channel.send({
       content: `**${author_name} (Intercom):**\n${message}`
     });
     
-    console.log('✅ Message sent to Discord');
     res.json({ success: true });
 
   } catch (error) {
@@ -146,7 +141,6 @@ app.post('/send-to-discord', async (req, res) => {
   }
 });
 
-// Endpoint to register a ticket channel for monitoring
 app.post('/register-ticket', async (req, res) => {
   try {
     const { 
@@ -156,12 +150,6 @@ app.post('/register-ticket', async (req, res) => {
       user_id 
     } = req.body;
 
-    console.log('=== Registering Ticket Channel ===');
-    console.log('Discord Channel:', discord_channel_id);
-    console.log('Intercom Ticket:', intercom_ticket_id);
-    console.log('Intercom Contact:', intercom_contact_id);
-
-    // Store the mapping
     ticketChannels.set(discord_channel_id, {
       intercom_ticket_id,
       intercom_contact_id,
@@ -169,9 +157,6 @@ app.post('/register-ticket', async (req, res) => {
       registered_at: Date.now()
     });
 
-    console.log('✅ Ticket channel registered');
-    console.log(`📊 Total tracked channels: ${ticketChannels.size}`);
-    
     res.json({ success: true });
 
   } catch (error) {
@@ -180,18 +165,11 @@ app.post('/register-ticket', async (req, res) => {
   }
 });
 
-// Endpoint to unregister a ticket channel (when closed)
 app.post('/unregister-ticket', async (req, res) => {
   try {
     const { discord_channel_id } = req.body;
 
-    const wasTracked = ticketChannels.has(discord_channel_id);
     ticketChannels.delete(discord_channel_id);
-    
-    if (wasTracked) {
-      console.log('✅ Ticket channel unregistered:', discord_channel_id);
-      console.log(`📊 Total tracked channels: ${ticketChannels.size}`);
-    }
     
     res.json({ success: true });
 
@@ -201,7 +179,6 @@ app.post('/unregister-ticket', async (req, res) => {
   }
 });
 
-// Endpoint to fetch and register an existing Intercom ticket
 app.post('/fetch-and-register-ticket', async (req, res) => {
   try {
     const { ticket_id, discord_channel_id } = req.body;
@@ -211,11 +188,6 @@ app.post('/fetch-and-register-ticket', async (req, res) => {
       return res.status(500).json({ error: 'No Intercom token configured' });
     }
 
-    console.log('=== Fetching Existing Ticket ===');
-    console.log('Ticket ID:', ticket_id);
-    console.log('Discord Channel:', discord_channel_id);
-
-    // Fetch the ticket from Intercom
     const ticketResponse = await axios.get(
       `https://api.intercom.io/tickets/${ticket_id}`,
       {
@@ -227,30 +199,23 @@ app.post('/fetch-and-register-ticket', async (req, res) => {
     );
 
     const ticket = ticketResponse.data;
-    console.log('✓ Ticket found:', ticket.ticket_attributes?._default_title_);
 
-    // Get the contact ID from the ticket
     const contactId = ticket.contacts?.contacts?.[0]?.id;
     
     if (!contactId) {
       return res.status(400).json({ error: 'No contact found in ticket' });
     }
 
-    // Extract Discord user ID from ticket description (if available)
     const description = ticket.ticket_attributes?._default_description_ || '';
     const userIdMatch = description.match(/Discord User ID: (\d+)/);
     const userId = userIdMatch ? userIdMatch[1] : null;
 
-    // Register the ticket channel
     ticketChannels.set(discord_channel_id, {
       intercom_ticket_id: ticket_id,
       intercom_contact_id: contactId,
       user_id: userId,
       registered_at: Date.now()
     });
-
-    console.log('✅ Existing ticket registered for two-way sync');
-    console.log(`📊 Total tracked channels: ${ticketChannels.size}`);
 
     res.json({ 
       success: true,
@@ -261,25 +226,23 @@ app.post('/fetch-and-register-ticket', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error fetching ticket:', error.response?.data || error.message);
+    console.error('❌ Error fetching ticket:', error.message);
     res.status(500).json({ 
-      error: error.message,
-      details: error.response?.data
+      error: error.message
     });
   }
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
     bot_ready: client.isReady(),
     tracked_channels: ticketChannels.size,
-    bot_user: client.user?.tag || 'Not logged in'
+    bot_user: client.user?.tag || 'Not logged in',
+    feedback_enabled: feedbackHandler !== null
   });
 });
 
-// Get all tracked channels (for debugging)
 app.get('/tracked-channels', (req, res) => {
   const channels = Array.from(ticketChannels.entries()).map(([channelId, info]) => ({
     discord_channel_id: channelId,
@@ -295,12 +258,28 @@ app.get('/tracked-channels', (req, res) => {
   });
 });
 
-// Login to Discord
+app.post('/update-dashboard', async (req, res) => {
+  try {
+    const { channel_id } = req.body;
+
+    if (!feedbackHandler) {
+      return res.status(503).json({ error: 'Feedback system not initialized' });
+    }
+
+    await feedbackHandler.updatePublicDashboard(channel_id);
+    res.json({ success: true });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 client.login(process.env.DISCORD_BOT_TOKEN);
 
 const PORT = 3001;
 app.listen(PORT, () => {
   console.log(`🤖 Discord bot API running on port ${PORT}`);
-  console.log(`📡 Monitoring ${ticketChannels.size} ticket channels`);
   console.log(`🔄 Two-way sync enabled`);
 });
+
+module.exports = { client, feedbackHandler };
