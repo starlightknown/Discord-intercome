@@ -23,13 +23,25 @@ client.once('ready', async () => {
   initializeFeedback(client);
   
   try {
-    await client.application.commands.create({
-      name: 'feedback',
-      description: 'Submit feedback or a feature request'
-    });
-    console.log('✅ /feedback slash command registered');
+    const feedbackChannelId = process.env.FEEDBACK_CHANNEL_ID || '1509139144042090626';
+    const feedbackChannel = await client.channels.fetch(feedbackChannelId);
+    
+    if (feedbackChannel && feedbackChannel.isTextBased()) {
+      const button = new ButtonBuilder()
+        .setCustomId('feedback_button')
+        .setLabel('📝 Submit Feedback')
+        .setStyle(ButtonStyle.Primary);
+
+      const row = new ActionRowBuilder().addComponents(button);
+
+      await feedbackChannel.send({
+        content: '**📝 Have feedback or a feature request?**\nClick the button below to submit!',
+        components: [row]
+      });
+      console.log('✅ Feedback button posted to channel');
+    }
   } catch (error) {
-    console.warn('⚠️  Could not register slash command:', error.message);
+    console.warn('⚠️ Could not post feedback button:', error.message);
   }
 });
 
@@ -113,23 +125,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'feedback') {
-        const button = new ButtonBuilder()
-          .setCustomId('feedback_button')
-          .setLabel('📝 Submit Feedback')
-          .setStyle(ButtonStyle.Primary);
-
-        const row = new ActionRowBuilder()
-          .addComponents(button);
-
-        await interaction.reply({
-          content: '**Have feedback or a feature request?** Click below to submit!',
-          components: [row],
-          ephemeral: true
-        });
-      }
-    } else if (interaction.isButton()) {
+    if (interaction.isButton()) {
       if (interaction.customId === 'feedback_button') {
         const modal = new ModalBuilder()
           .setCustomId('feedback_modal')
@@ -182,6 +178,8 @@ client.on('interactionCreate', async (interaction) => {
             content: `✅ **Feedback submitted!**\nID: ${response.data.feedback_id}\n\nThank you for your input!`,
             ephemeral: true
           });
+
+          await updateDashboard();
         } catch (error) {
           console.error('Error submitting feedback:', error.message);
           await interaction.editReply({
@@ -195,6 +193,75 @@ client.on('interactionCreate', async (interaction) => {
     console.error('❌ Error handling interaction:', error.message);
   }
 });
+
+async function updateDashboard() {
+  try {
+    const modChannelId = process.env.MOD_CHANNEL_ID || '1236805785258950677';
+    const feedbackChannel = await client.channels.fetch(modChannelId);
+    
+    if (!feedbackChannel || !feedbackChannel.isTextBased()) return;
+
+    const fs = require('fs');
+    const feedbackPath = './feedback-data.json';
+    
+    let feedbackData = [];
+    if (fs.existsSync(feedbackPath)) {
+      feedbackData = JSON.parse(fs.readFileSync(feedbackPath, 'utf-8'));
+    }
+
+    const approved = feedbackData.filter(f => f.Status === 'approved');
+    const working = feedbackData.filter(f => f.Status === 'working');
+    const rejected = feedbackData.filter(f => f.Status === 'rejected');
+    const pending = feedbackData.filter(f => f.Status === 'pending');
+
+    const embed = {
+      color: 0x9b59b6,
+      title: '📊 Feedback Dashboard',
+      fields: [
+        {
+          name: '✅ Forwarded to Team',
+          value: approved.length > 0
+            ? approved.map(f => `• ${f['Feedback Text'].substring(0, 40)}... (${f['Duplicate Count']} requests)`).join('\n')
+            : 'No approved feedback yet',
+          inline: false,
+        },
+        {
+          name: '🏗️ Working On It',
+          value: working.length > 0
+            ? working.map(f => `• ${f['Feedback Text'].substring(0, 40)}...`).join('\n')
+            : 'No in-progress items',
+          inline: false,
+        },
+        {
+          name: '❌ Not Planned',
+          value: rejected.length > 0
+            ? rejected.map(f => `• ${f['Feedback Text'].substring(0, 40)}...`).join('\n')
+            : 'No rejected items',
+          inline: false,
+        },
+        {
+          name: '📈 Stats',
+          value: `Total: ${feedbackData.length} | Pending: ${pending.length} | Approved: ${approved.length}`,
+          inline: false,
+        },
+      ],
+      timestamp: new Date(),
+    };
+
+    const messages = await feedbackChannel.messages.fetch({ limit: 10 });
+    const dashboardMsg = messages.find(m => m.embeds[0]?.title === '📊 Feedback Dashboard');
+
+    if (dashboardMsg) {
+      await dashboardMsg.edit({ embeds: [embed] });
+    } else {
+      await feedbackChannel.send({ embeds: [embed] });
+    }
+
+    console.log('✅ Dashboard updated');
+  } catch (error) {
+    console.error('⚠️ Failed to update dashboard:', error.message);
+  }
+}
 
 const PORT = 3001;
 app.listen(PORT, () => {
