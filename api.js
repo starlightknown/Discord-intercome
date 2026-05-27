@@ -358,23 +358,28 @@ app.post('/validate-secrets', async (req, res) => {
   }
 });
 
-app.post('/init-feedback', async (req, res) => {
+function initializeFeedback(discordClient) {
   try {
     if (feedbackHandler) {
-      return res.json({ status: 'already_initialized' });
+      console.log('ℹ️  Feedback handler already initialized');
+      return true;
     }
 
-    const { client } = req.body;
-    if (!client) {
-      return res.status(400).json({ error: 'Discord client required' });
-    }
+    feedbackHandler = new FeedbackHandler(discordClient);
+    global.feedbackHandler = feedbackHandler;
+    
+    feedbackHandler.initialize().then(() => {
+      console.log('✅ Feedback handler initialized');
+    }).catch((err) => {
+      console.error('❌ Failed to initialize feedback:', err);
+    });
 
-    console.log('Initializing feedback handler...');
-    res.json({ status: 'feedback_initialized' });
+    return true;
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('❌ Error initializing feedback:', error.message);
+    return false;
   }
-});
+}
 
 app.use((req, res) => {
   res.status(404).json({
@@ -386,17 +391,10 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 10000;
 
-function initialize(discordClient) {
-  feedbackHandler = new FeedbackHandler(discordClient);
-  feedbackHandler.initialize().catch(error => {
-    console.error('❌ Failed to initialize feedback:', error);
-  });
-}
-
 app.listen(PORT, () => {
   console.log(`🚀 Middleware server running on port ${PORT}`);
   console.log(`📡 Using Intercom API version 2.14`);
   console.log(`✅ Ready to receive tickets from Discord Tickets v2`);
 });
 
-module.exports = { app, initialize };
+module.exports = { app, initializeFeedback };

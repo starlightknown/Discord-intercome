@@ -71,7 +71,7 @@ class FeedbackHandler {
 
       const allMatches = [
         ...duplicationResult.matches,
-        ...intercomDupes.map((m) => ({ feedback: m, similarity: m.similarity })),
+        ...intercomDupes,
       ];
 
       let dbFeedback = null;
@@ -159,11 +159,10 @@ class FeedbackHandler {
       if (similarFeedback && similarFeedback.length > 0) {
         similarText = '\n\n**Similar Feedback Found:**\n';
         similarFeedback.slice(0, 3).forEach((m) => {
-          const similarity =
-            m.similarity instanceof Object
-              ? (m.similarity * 100).toFixed(0)
-              : Math.round(m.similarity * 100);
-          similarText += `• ${similarity}% match: "${m.feedback?.['Feedback Text'] || m.text}"\n`;
+          const similarity = Math.round((m.similarity || 0) * 100);
+          const feedbackText = m.feedback?.['Feedback Text'] || 'Unknown';
+          const source = m.feedback?.source === 'intercom' ? ' (Intercom)' : '';
+          similarText += `• ${similarity}% match: "${feedbackText}"${source}\n`;
         });
       }
 

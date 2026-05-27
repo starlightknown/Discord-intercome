@@ -40,11 +40,22 @@ class FeedbackManager {
         await this.createSheet();
       }
     } catch (error) {
-      if (error.message.includes('not found')) {
+      const statusCode = error?.code || error?.response?.status;
+      const apiStatus = error?.response?.data?.error?.status;
+      const apiErrors = error?.errors || error?.response?.data?.error?.errors;
+      
+      const isNotFound =
+        statusCode === 404 ||
+        apiStatus === 'NOT_FOUND' ||
+        (Array.isArray(apiErrors) &&
+          apiErrors.some((e) => e.reason === 'notFound'));
+
+      if (isNotFound) {
         await this.createSheet();
-      } else {
-        throw error;
+        return;
       }
+
+      throw error;
     }
   }
 
@@ -189,9 +200,14 @@ class DuplicateDetector {
 
   exactMatch(text, existingFeedback) {
     const normalizedText = text.toLowerCase().trim();
-    return existingFeedback.filter(
-      (f) => f['Feedback Text'].toLowerCase().trim() === normalizedText
-    );
+    return existingFeedback
+      .filter(
+        (f) => f['Feedback Text'].toLowerCase().trim() === normalizedText
+      )
+      .map((f) => ({
+        feedback: f,
+        similarity: 1,
+      }));
   }
 
   async semanticSimilarity(text, existingFeedback) {
@@ -265,8 +281,12 @@ class DuplicateDetector {
         const ticketBody = ticket.ticket_attributes?._default_description_ || '';
         if (this.isSimilarText(text, ticketBody)) {
           matches.push({
-            id: ticket.id,
-            title: ticket.ticket_attributes?._default_title_,
+            feedback: {
+              ID: ticket.id,
+              'Feedback Text': ticketBody,
+              source: 'intercom',
+              title: ticket.ticket_attributes?._default_title_,
+            },
             similarity: this.calculateSimilarity(text, ticketBody),
           });
         }

@@ -248,7 +248,7 @@ Check system health.
 
 ## Monitoring
 
-Logs are output to console. For production, recommend:
+Logs are output to the console. For production, it's recommended to:
 - Redirect stdout/stderr to file
 - Use log aggregation service (Render, Datadog, etc.)
 - Set up Discord bot status alerts

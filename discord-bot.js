@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
 const express = require('express');
 const axios = require('axios');
 const FeedbackHandler = require('./feedback-handler');
+const { initializeFeedback: initFeedbackFromAPI } = require('./api');
 
 const app = express();
 app.use(express.json());
@@ -20,17 +21,11 @@ const ticketChannels = new Map();
 
 client.once('ready', () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
-  initializeFeedback();
+  initFeedbackFromAPI(client);
 });
 
-async function initializeFeedback() {
-  try {
-    feedbackHandler = new FeedbackHandler(client);
-    await feedbackHandler.initialize();
-    console.log('✅ Feedback system initialized');
-  } catch (error) {
-    console.error('❌ Failed to initialize feedback:', error);
-  }
+function setFeedbackHandler(handler) {
+  feedbackHandler = handler;
 }
 
 client.on('messageCreate', async (message) => {
