@@ -282,6 +282,8 @@ class FeedbackHandler {
         await this.postToSlack(feedback);
       }
 
+      global.updateDashboardFunc && await global.updateDashboardFunc();
+
       console.log(`✅ Feedback ${feedbackId} marked as ${newStatus}`);
     } catch (error) {
       console.error('❌ Error handling mod approval:', error.message);

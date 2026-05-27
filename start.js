@@ -196,8 +196,8 @@ client.on('interactionCreate', async (interaction) => {
 
 async function updateDashboard() {
   try {
-    const modChannelId = process.env.MOD_CHANNEL_ID || '1236805785258950677';
-    const feedbackChannel = await client.channels.fetch(modChannelId);
+    const dashboardChannelId = process.env.PUBLIC_DASHBOARD_CHANNEL_ID || '1509139144042090626';
+    const feedbackChannel = await client.channels.fetch(dashboardChannelId);
     
     if (!feedbackChannel || !feedbackChannel.isTextBased()) return;
 
@@ -379,5 +379,7 @@ app.post('/update-dashboard', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+global.updateDashboardFunc = updateDashboard;
 
 client.login(process.env.DISCORD_BOT_TOKEN);
