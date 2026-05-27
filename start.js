@@ -13,6 +13,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessageReactions,
   ]
 });
 
@@ -112,14 +113,19 @@ client.on('messageReactionAdd', async (reaction, user) => {
     if (user.bot) return;
 
     const modChannelId = process.env.MOD_CHANNEL_ID;
+    console.log(`🔔 Reaction added by ${user.username} in channel ${reaction.message.channel.id}, emoji: ${reaction.emoji.name}`);
+    
     if (reaction.message.channel.id === modChannelId) {
+      console.log('✅ Reaction in mod channel, processing...');
       const feedbackHandler = global.feedbackHandler;
       if (feedbackHandler) {
         await feedbackHandler.handleModApproval(reaction, user);
+      } else {
+        console.warn('⚠️  Feedback handler not initialized');
       }
     }
   } catch (error) {
-    console.error('❌ Error handling reaction:', error.message);
+    console.error('❌ Error handling reaction:', error.message, error.stack);
   }
 });
 

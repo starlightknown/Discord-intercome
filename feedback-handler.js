@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { FeedbackManager, DuplicateDetector } = require('./feedback');
+const { WebClient } = require('@slack/web-api');
 
 class FeedbackHandler {
   constructor(discordClient) {
@@ -95,6 +96,9 @@ class FeedbackHandler {
           id: `DUP-${Date.now()}`,
           originalId,
           isDuplicate: true,
+          discordUser: user_id,
+          email,
+          feedbackText,
         };
 
         res.status(200).json({
@@ -107,6 +111,8 @@ class FeedbackHandler {
             similarity: m.similarity || 'exact',
           })),
         });
+
+        await this.notifyModsOfPendingFeedback(dbFeedback, duplicationResult.matches);
       } else {
         dbFeedback = await this.feedbackManager.addFeedback({
           discordUser: user_id,
@@ -151,7 +157,7 @@ class FeedbackHandler {
 
       const channel = await this.client.channels.fetch(modChannelId);
       if (!channel || !channel.isTextBased()) {
-        console.warn('⚠️  Mod channel not found');
+        console.warn('⚠️  Mod channel not found or not text-based');
         return;
       }
 
@@ -160,15 +166,18 @@ class FeedbackHandler {
         similarText = '\n\n**Similar Feedback Found:**\n';
         similarFeedback.slice(0, 3).forEach((m) => {
           const similarity = Math.round((m.similarity || 0) * 100);
-          const feedbackText = m.feedback?.['Feedback Text'] || 'Unknown';
-          const source = m.feedback?.source === 'intercom' ? ' (Intercom)' : '';
+          const feedbackText = m.feedback?.['Feedback Text'] || m['Feedback Text'] || 'Unknown';
+          const source = m.feedback?.source === 'intercom' || m.source === 'intercom' ? ' (Intercom)' : '';
           similarText += `• ${similarity}% match: "${feedbackText}"${source}\n`;
         });
       }
 
+      const title = feedback.isDuplicate ? '🔄 Duplicate Feedback Submitted' : '📥 New Feedback Pending Review';
+      const color = feedback.isDuplicate ? 0xf39c12 : 0x3498db;
+
       const embed = {
-        color: 0x3498db,
-        title: '📥 New Feedback Pending Review',
+        color,
+        title,
         fields: [
           {
             name: 'Feedback ID',
@@ -194,6 +203,14 @@ class FeedbackHandler {
         timestamp: new Date(),
       };
 
+      if (feedback.isDuplicate && feedback.originalId) {
+        embed.fields.push({
+          name: 'Duplicate Of',
+          value: feedback.originalId,
+          inline: true,
+        });
+      }
+
       if (similarText) {
         embed.fields.push({
           name: 'Similar Feedback',
@@ -213,11 +230,12 @@ class FeedbackHandler {
       await message.react('❌');
       await message.react('🏗️');
 
-      console.log('✅ Notified mods of pending feedback');
+      console.log(`✅ Notified mods of ${feedback.isDuplicate ? 'duplicate' : 'new'} feedback: ${feedback.id}`);
     } catch (error) {
       console.error(
         '❌ Error notifying mods:',
-        error.message
+        error.message,
+        error.stack
       );
     }
   }
@@ -226,14 +244,26 @@ class FeedbackHandler {
     try {
       if (user.bot) return;
 
+      console.log(`📋 Processing reaction: ${reaction.emoji.name} from ${user.username}`);
+
       const message = reaction.message;
       const embed = message.embeds[0];
 
-      if (!embed || !embed.title.includes('Pending Review')) {
+      if (!embed) {
+        console.log('⚠️  No embed found in message');
+        return;
+      }
+
+      console.log(`📌 Embed title: ${embed.title}`);
+
+      if (!embed.title.includes('Pending Review') && !embed.title.includes('Duplicate')) {
+        console.log('⚠️  Not a feedback embed, ignoring');
         return;
       }
 
       const feedbackId = embed.fields?.find((f) => f.name === 'Feedback ID')
+        ?.value;
+      const duplicateOf = embed.fields?.find((f) => f.name === 'Duplicate Of')
         ?.value;
 
       if (!feedbackId) {
@@ -256,9 +286,11 @@ class FeedbackHandler {
           return;
       }
 
-      await this.feedbackManager.updateFeedbackStatus(feedbackId, newStatus);
+      const targetId = duplicateOf || feedbackId;
+      
+      await this.feedbackManager.updateFeedbackStatus(targetId, newStatus);
 
-      const feedback = await this.feedbackManager.getFeedbackById(feedbackId);
+      const feedback = await this.feedbackManager.getFeedbackById(targetId);
 
       const statusEmojis = {
         approved: '✅',
@@ -284,7 +316,7 @@ class FeedbackHandler {
 
       global.updateDashboardFunc && await global.updateDashboardFunc();
 
-      console.log(`✅ Feedback ${feedbackId} marked as ${newStatus}`);
+      console.log(`✅ Feedback ${targetId} marked as ${newStatus}`);
     } catch (error) {
       console.error('❌ Error handling mod approval:', error.message);
     }
@@ -292,15 +324,19 @@ class FeedbackHandler {
 
   async postToSlack(feedback) {
     try {
-      const slackWebhook = process.env.SLACK_WEBHOOK_URL;
+      const slackBotToken = process.env.SLACK_BOT_TOKEN;
       const slackChannel = process.env.SLACK_CHANNEL;
 
-      if (!slackWebhook || !slackChannel) {
-        console.warn('⚠️  Slack webhook or channel not configured');
+      if (!slackBotToken || !slackChannel) {
+        console.warn('⚠️  Slack bot token or channel not configured');
         return;
       }
 
-      const message = {
+      const slack = new WebClient(slackBotToken);
+
+      const duplicateCount = feedback['Duplicate Count'] || feedback.duplicateCount || '1';
+
+      await slack.chat.postMessage({
         channel: slackChannel,
         attachments: [
           {
@@ -314,32 +350,30 @@ class FeedbackHandler {
               },
               {
                 title: 'From',
-                value: feedback.Email,
+                value: feedback.Email || feedback.email || 'Unknown',
                 short: true,
               },
               {
                 title: 'Requests',
-                value:
-                  feedback['Duplicate Count'] || '1',
+                value: String(duplicateCount),
                 short: true,
               },
               {
                 title: 'Discord User',
-                value: feedback['Discord User'],
+                value: feedback['Discord User'] || feedback.discordUser || 'Unknown',
                 short: true,
               },
               {
                 title: 'Feedback ID',
-                value: feedback.ID,
+                value: feedback.ID || feedback.id,
                 short: true,
               },
             ],
             ts: Math.floor(new Date().getTime() / 1000),
           },
         ],
-      };
+      });
 
-      await axios.post(slackWebhook, message);
       console.log('✅ Posted to Slack');
     } catch (error) {
       console.error('❌ Error posting to Slack:', error.message);
