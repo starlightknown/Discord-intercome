@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const axios = require('axios');
 const FeedbackHandler = require('./feedback-handler');
 const { app, initializeFeedback } = require('./api');
@@ -18,9 +18,19 @@ const client = new Client({
 
 const ticketChannels = new Map();
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
   initializeFeedback(client);
+  
+  try {
+    await client.application.commands.create({
+      name: 'feedback',
+      description: 'Submit feedback or a feature request'
+    });
+    console.log('✅ /feedback slash command registered');
+  } catch (error) {
+    console.warn('⚠️  Could not register slash command:', error.message);
+  }
 });
 
 client.on('messageCreate', async (message) => {
@@ -98,6 +108,91 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
   } catch (error) {
     console.error('❌ Error handling reaction:', error.message);
+  }
+});
+
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === 'feedback') {
+        const button = new ButtonBuilder()
+          .setCustomId('feedback_button')
+          .setLabel('📝 Submit Feedback')
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder()
+          .addComponents(button);
+
+        await interaction.reply({
+          content: '**Have feedback or a feature request?** Click below to submit!',
+          components: [row],
+          ephemeral: true
+        });
+      }
+    } else if (interaction.isButton()) {
+      if (interaction.customId === 'feedback_button') {
+        const modal = new ModalBuilder()
+          .setCustomId('feedback_modal')
+          .setTitle('📝 Submit Feedback');
+
+        const feedbackInput = new TextInputBuilder()
+          .setCustomId('feedback_text')
+          .setLabel('Your Feedback')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Describe your feedback or feature request...')
+          .setRequired(true)
+          .setMaxLength(500);
+
+        const emailInput = new TextInputBuilder()
+          .setCustomId('feedback_email')
+          .setLabel('Your Email')
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder('your@email.com')
+          .setRequired(true);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(feedbackInput),
+          new ActionRowBuilder().addComponents(emailInput)
+        );
+
+        await interaction.showModal(modal);
+      }
+    } else if (interaction.isModalSubmit()) {
+      if (interaction.customId === 'feedback_modal') {
+        const feedbackText = interaction.fields.getTextInputValue('feedback_text');
+        const email = interaction.fields.getTextInputValue('feedback_email');
+        const userId = interaction.user.id;
+        const username = interaction.user.username;
+
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+          const response = await axios.post('http://localhost:3001/feedback-submission', {
+            user_id: userId,
+            user_email: email,
+            ticket_id: `discord_${userId}_${Date.now()}`,
+            form_data: {
+              feedback: feedbackText,
+              email: email,
+              username: username
+            }
+          });
+
+          await interaction.editReply({
+            content: `✅ **Feedback submitted!**\nID: ${response.data.feedback_id}\n\nThank you for your input!`,
+            ephemeral: true
+          });
+        } catch (error) {
+          console.error('Error submitting feedback:', error.message);
+          await interaction.editReply({
+            content: '❌ Failed to submit feedback. Please try again.',
+            ephemeral: true
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error handling interaction:', error.message);
   }
 });
 
