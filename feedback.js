@@ -1,31 +1,62 @@
-const { google } = require('googleapis');
 const axios = require('axios');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 
 class FeedbackManager {
   constructor() {
+    this.useLocal = process.env.USE_LOCAL_STORAGE === 'true' || !process.env.GOOGLE_SHEETS_ID;
     this.sheets = null;
     this.spreadsheetId = process.env.GOOGLE_SHEETS_ID;
     this.sheetName = 'Feedback';
     this.initialized = false;
+    this.localFile = './feedback-data.json';
+    this.feedback = [];
   }
 
   async initialize() {
     try {
-      const auth = new google.auth.GoogleAuth({
-        keyFile: process.env.GOOGLE_CREDENTIALS_PATH || './google-credentials.json',
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
+      if (this.useLocal) {
+        this.loadLocalData();
+        this.initialized = true;
+        console.log('✅ Local JSON storage initialized');
+      } else {
+        const { google } = require('googleapis');
+        const auth = new google.auth.GoogleAuth({
+          keyFile: process.env.GOOGLE_CREDENTIALS_PATH || './google-credentials.json',
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
 
-      this.sheets = google.sheets({ version: 'v4', auth });
-      
-      await this.ensureSheetExists();
-      this.initialized = true;
-      console.log('✅ Google Sheets initialized');
+        this.sheets = google.sheets({ version: 'v4', auth });
+        
+        await this.ensureSheetExists();
+        this.initialized = true;
+        console.log('✅ Google Sheets initialized');
+      }
     } catch (error) {
-      console.error('❌ Failed to initialize Google Sheets:', error.message);
+      console.error('❌ Failed to initialize storage:', error.message);
       throw error;
+    }
+  }
+
+  loadLocalData() {
+    try {
+      if (fs.existsSync(this.localFile)) {
+        const data = fs.readFileSync(this.localFile, 'utf-8');
+        this.feedback = JSON.parse(data);
+      } else {
+        this.feedback = [];
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not load local data:', error.message);
+      this.feedback = [];
+    }
+  }
+
+  saveLocalData() {
+    try {
+      fs.writeFileSync(this.localFile, JSON.stringify(this.feedback, null, 2));
+    } catch (error) {
+      console.error('❌ Failed to save local data:', error.message);
     }
   }
 
@@ -96,30 +127,52 @@ class FeedbackManager {
     const timestamp = new Date().toISOString();
     const status = 'pending';
 
-    const row = [
-      id,
-      timestamp,
-      discordUser || 'Unknown',
-      email,
-      feedbackText,
-      intercomId,
-      status,
-      duplicateCount,
-      '', // Similar IDs (populated on duplicate detection)
-      '', // Approval Date
-    ];
+    const feedback = {
+      'ID': id,
+      'Timestamp': timestamp,
+      'Discord User': discordUser || 'Unknown',
+      'Email': email,
+      'Feedback Text': feedbackText,
+      'Intercom ID': intercomId,
+      'Status': status,
+      'Duplicate Count': duplicateCount,
+      'Similar IDs': '',
+      'Approval Date': ''
+    };
 
-    await this.sheets.spreadsheets.values.append({
-      spreadsheetId: this.spreadsheetId,
-      range: `${this.sheetName}!A:J`,
-      valueInputOption: 'RAW',
-      resource: { values: [row] },
-    });
+    if (this.useLocal) {
+      this.feedback.push(feedback);
+      this.saveLocalData();
+    } else {
+      const row = [
+        id,
+        timestamp,
+        discordUser || 'Unknown',
+        email,
+        feedbackText,
+        intercomId,
+        status,
+        duplicateCount,
+        '',
+        '',
+      ];
+
+      await this.sheets.spreadsheets.values.append({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.sheetName}!A:J`,
+        valueInputOption: 'RAW',
+        resource: { values: [row] },
+      });
+    }
 
     return { id, ...data, status, timestamp };
   }
 
   async getAllFeedback() {
+    if (this.useLocal) {
+      return this.feedback;
+    }
+
     const response = await this.sheets.spreadsheets.values.get({
       spreadsheetId: this.spreadsheetId,
       range: `${this.sheetName}!A2:J`,
@@ -139,28 +192,39 @@ class FeedbackManager {
 
   async updateFeedbackStatus(feedbackId, newStatus) {
     const allFeedback = await this.getAllFeedback();
-    const rowIndex = allFeedback.findIndex((f) => f.ID === feedbackId);
+    const feedback = allFeedback.find((f) => f.ID === feedbackId);
 
-    if (rowIndex === -1) {
+    if (!feedback) {
       throw new Error('Feedback not found');
     }
 
     const approvalDate = newStatus === 'approved' ? new Date().toISOString() : '';
 
-    await this.sheets.spreadsheets.values.update({
-      spreadsheetId: this.spreadsheetId,
-      range: `${this.sheetName}!G${rowIndex + 2}`,
-      valueInputOption: 'RAW',
-      resource: { values: [[newStatus]] },
-    });
+    if (this.useLocal) {
+      const index = this.feedback.findIndex((f) => f.ID === feedbackId);
+      this.feedback[index]['Status'] = newStatus;
+      if (approvalDate) {
+        this.feedback[index]['Approval Date'] = approvalDate;
+      }
+      this.saveLocalData();
+    } else {
+      const rowIndex = allFeedback.findIndex((f) => f.ID === feedbackId);
 
-    if (approvalDate) {
       await this.sheets.spreadsheets.values.update({
         spreadsheetId: this.spreadsheetId,
-        range: `${this.sheetName}!J${rowIndex + 2}`,
+        range: `${this.sheetName}!G${rowIndex + 2}`,
         valueInputOption: 'RAW',
-        resource: { values: [[approvalDate]] },
+        resource: { values: [[newStatus]] },
       });
+
+      if (approvalDate) {
+        await this.sheets.spreadsheets.values.update({
+          spreadsheetId: this.spreadsheetId,
+          range: `${this.sheetName}!J${rowIndex + 2}`,
+          valueInputOption: 'RAW',
+          resource: { values: [[approvalDate]] },
+        });
+      }
     }
 
     console.log(`✅ Updated feedback ${feedbackId} status to ${newStatus}`);
@@ -168,18 +232,26 @@ class FeedbackManager {
 
   async updateDuplicateCount(feedbackId, count) {
     const allFeedback = await this.getAllFeedback();
-    const rowIndex = allFeedback.findIndex((f) => f.ID === feedbackId);
+    const feedback = allFeedback.find((f) => f.ID === feedbackId);
 
-    if (rowIndex === -1) {
+    if (!feedback) {
       throw new Error('Feedback not found');
     }
 
-    await this.sheets.spreadsheets.values.update({
-      spreadsheetId: this.spreadsheetId,
-      range: `${this.sheetName}!H${rowIndex + 2}`,
-      valueInputOption: 'RAW',
-      resource: { values: [[count]] },
-    });
+    if (this.useLocal) {
+      const index = this.feedback.findIndex((f) => f.ID === feedbackId);
+      this.feedback[index]['Duplicate Count'] = count;
+      this.saveLocalData();
+    } else {
+      const rowIndex = allFeedback.findIndex((f) => f.ID === feedbackId);
+
+      await this.sheets.spreadsheets.values.update({
+        spreadsheetId: this.spreadsheetId,
+        range: `${this.sheetName}!H${rowIndex + 2}`,
+        valueInputOption: 'RAW',
+        resource: { values: [[count]] },
+      });
+    }
   }
 
   async getFeedbackById(feedbackId) {
