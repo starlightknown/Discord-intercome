@@ -18,8 +18,22 @@ class FeedbackManager {
         this.initialized = true;
         console.log('✅ Local JSON storage initialized');
       } else {
+        let credentials;
+
+        if (process.env.GOOGLE_CREDENTIALS_BASE64) {
+          const decoded = Buffer.from(process.env.GOOGLE_CREDENTIALS_BASE64, 'base64').toString('utf-8');
+          credentials = JSON.parse(decoded);
+        } else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+          const fs = require('fs');
+          const credPath = process.env.GOOGLE_CREDENTIALS_PATH;
+          const credData = fs.readFileSync(credPath, 'utf-8');
+          credentials = JSON.parse(credData);
+        } else {
+          throw new Error('Neither GOOGLE_CREDENTIALS_BASE64 nor GOOGLE_CREDENTIALS_PATH provided');
+        }
+
         const auth = new google.auth.GoogleAuth({
-          keyFile: process.env.GOOGLE_CREDENTIALS_PATH || './google-credentials.json',
+          credentials,
           scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
 

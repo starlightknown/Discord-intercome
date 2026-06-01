@@ -5,7 +5,8 @@
   "main": "api.js",
   "scripts": {
     "start": "node start.js",
-    "dev": "node api.js"
+    "dev": "node api.js",
+    "encode-creds": "node encode-credentials.js"
   },
   "keywords": ["intercom", "discord", "tickets", "feedback"],
   "author": "",
